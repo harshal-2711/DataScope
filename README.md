@@ -72,15 +72,22 @@ status pulled from `GET /api/health`.
 
 ## Current Development Phase
 
-**Phase 1 — Project Foundation**
-- Frontend/backend scaffolding, application shell, navigation, and styling
-- Health check endpoint and frontend/backend connectivity test
+**Phase 2 — Dataset Ingestion and Understanding**
+- Dataset upload (CSV, XLSX, XLS) via drag-and-drop or file picker
+- Backend validation: file type, size limit, corrupt/empty file, empty dataset
+- Dataset metadata: row/column counts, column names, detected data types
+- Preview of the first 10 rows
+- Upload flow states: idle → selected → processing → success/error, with retry
+- Files are processed in memory only and are never persisted to disk
 - No analytics, forecasting, database, auth, or external APIs yet
+
+Phase 1 (project foundation) is complete: frontend/backend scaffolding, app
+shell, navigation, and the `/api/health` connectivity check.
 
 ## Roadmap (Summary)
 
-- **Phase 1** — Foundation (this phase)
-- **Phase 2** — Dataset ingestion and profiling
+- **Phase 1** — Foundation ✅
+- **Phase 2** — Dataset ingestion and profiling ✅ (this phase)
 - **Phase 3** — Exploration and visualization tools
 - **Phase 4** — Trend and risk detection
 - **Phase 5** — Forecasting
