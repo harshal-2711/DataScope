@@ -72,23 +72,35 @@ status pulled from `GET /api/health`.
 
 ## Current Development Phase
 
-**Phase 2 — Dataset Ingestion and Understanding**
-- Dataset upload (CSV, XLSX, XLS) via drag-and-drop or file picker
-- Backend validation: file type, size limit, corrupt/empty file, empty dataset
-- Dataset metadata: row/column counts, column names, detected data types
-- Preview of the first 10 rows
-- Upload flow states: idle → selected → processing → success/error, with retry
-- Files are processed in memory only and are never persisted to disk
-- No analytics, forecasting, database, auth, or external APIs yet
+**Phase 3 — Exploration and Automatic Visualization**
+- Uploaded datasets are retained server-side in memory (no database) keyed
+  by a generated `dataset_id`, so charts can be aggregated on demand
+  without re-uploading
+- A column profiler classifies every column (numeric, categorical,
+  datetime, boolean, identifier, high-cardinality, or ignore) with no
+  manual input
+- A recommendation engine turns that profile straight into a ranked,
+  diversified set of charts (bar, line, pie, histogram, scatter) —
+  aggregation (sum/mean, time bucketing, top-N + "Other", correlation
+  ranking for scatter pairs) happens entirely on the backend
+- `GET /api/dataset/{dataset_id}/recommendations` returns ready-to-render,
+  already-aggregated chart data — the frontend never sees raw rows or
+  picks axes/columns/aggregations itself
+- The Explore page automatically renders the recommended charts for
+  whichever dataset was most recently uploaded on the Dataset page (shared
+  via client-side `DatasetContext`, no auth/session concept)
+- Categorical-only datasets (no numeric columns at all) still produce
+  count/proportion charts rather than being silently dropped
 
-Phase 1 (project foundation) is complete: frontend/backend scaffolding, app
-shell, navigation, and the `/api/health` connectivity check.
+Phase 2 (dataset ingestion) and Phase 1 (project foundation) remain intact
+and unchanged.
 
 ## Roadmap (Summary)
 
 - **Phase 1** — Foundation ✅
-- **Phase 2** — Dataset ingestion and profiling ✅ (this phase)
-- **Phase 3** — Exploration and visualization tools
+- **Phase 2** — Dataset ingestion and profiling ✅
+- **Phase 3** — Exploration and visualization tools ✅ (this phase)
 - **Phase 4** — Trend and risk detection
 - **Phase 5** — Forecasting
 - **Phase 6** — Recommendations and reporting
+

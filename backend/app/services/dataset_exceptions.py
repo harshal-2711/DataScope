@@ -37,3 +37,20 @@ class UnreadableFileError(DatasetError):
 
 class EmptyDatasetError(DatasetError):
     """Raised when the parsed dataset has no rows or no columns."""
+
+
+class DatasetNotFoundError(DatasetError):
+    """Raised when a dataset_id doesn't match any stored dataset.
+
+    This is a 404, not a 400 — the request itself is well-formed, it just
+    refers to a dataset that was never uploaded, already evicted from the
+    in-memory store, or existed before a backend restart.
+    """
+
+    def __init__(self, message: str) -> None:
+        super().__init__(message, status_code=404)
+
+
+class NoChartableColumnsError(DatasetError):
+    """Raised when a dataset has no columns the recommendation engine can
+    visualize (e.g. every column is an identifier, empty, or constant)."""

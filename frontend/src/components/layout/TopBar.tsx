@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button"
 import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet"
 import { SidebarNav } from "@/components/layout/Sidebar"
 import { ThemeToggle } from "@/components/theme/ThemeToggle"
+import { ActiveDatasetBadge } from "@/components/dataset/ActiveDatasetBadge"
 
 export function TopBar() {
   const [open, setOpen] = useState(false)
@@ -28,7 +29,9 @@ export function TopBar() {
         </Sheet>
         <span className="font-semibold">DataScope</span>
       </div>
-      <div className="hidden md:block" />
+      <div className="hidden md:block">
+        <ActiveDatasetBadge />
+      </div>
       <ThemeToggle />
     </header>
   )

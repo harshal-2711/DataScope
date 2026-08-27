@@ -22,6 +22,11 @@
   --border: oklch(0.922 0 0);
   --input: oklch(0.922 0 0);
   --ring: oklch(0.708 0 0);
+  --chart-1: oklch(0.646 0.222 41.116);
+  --chart-2: oklch(0.6 0.118 184.704);
+  --chart-3: oklch(0.398 0.07 227.392);
+  --chart-4: oklch(0.828 0.189 84.429);
+  --chart-5: oklch(0.769 0.188 70.08);
 }
 
 .dark {
@@ -43,6 +48,11 @@
   --border: oklch(1 0 0 / 10%);
   --input: oklch(1 0 0 / 15%);
   --ring: oklch(0.556 0 0);
+  --chart-1: oklch(0.488 0.243 264.376);
+  --chart-2: oklch(0.696 0.17 162.48);
+  --chart-3: oklch(0.769 0.188 70.08);
+  --chart-4: oklch(0.627 0.265 303.9);
+  --chart-5: oklch(0.645 0.246 16.439);
 }
 
 @theme inline {
@@ -68,6 +78,11 @@
   --color-border: var(--border);
   --color-input: var(--input);
   --color-ring: var(--ring);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
 }
 
 @layer base {
@@ -77,4 +92,57 @@
   body {
     @apply bg-background text-foreground;
   }
+}
+
+/* Lightweight, dependency-free entrance animation for chart content --
+   used when the detail modal opens and when its data changes (e.g. a new
+   date range is applied). Kept short and subtle per the "fast and
+   professional, not distracting" requirement. */
+@keyframes chart-fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-chart-in {
+  animation: chart-fade-in 260ms ease-out;
+}
+
+/* Dialog enter/exit animations, driven by Radix's data-state attribute.
+   Plain CSS (not the tailwindcss-animate plugin, which isn't a project
+   dependency) -- Radix still waits for these to finish before unmounting
+   on close, so the exit animation is not cut short. */
+@keyframes dialog-overlay-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes dialog-overlay-out {
+  from { opacity: 1; }
+  to { opacity: 0; }
+}
+@keyframes dialog-content-in {
+  from { opacity: 0; transform: translate(-50%, -50%) scale(0.96); }
+  to { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+}
+@keyframes dialog-content-out {
+  from { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+  to { opacity: 0; transform: translate(-50%, -50%) scale(0.96); }
+}
+
+[data-slot="dialog-overlay"][data-state="open"] {
+  animation: dialog-overlay-in 200ms ease-out;
+}
+[data-slot="dialog-overlay"][data-state="closed"] {
+  animation: dialog-overlay-out 150ms ease-in;
+}
+[data-slot="dialog-content"][data-state="open"] {
+  animation: dialog-content-in 200ms ease-out;
+}
+[data-slot="dialog-content"][data-state="closed"] {
+  animation: dialog-content-out 150ms ease-in;
 }
