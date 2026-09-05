@@ -20,6 +20,25 @@ const TIER_HEIGHT: Record<ChartCardTier, number> = {
   supporting: 220,
 }
 
+// Chart-type-specific adjustment layered on top of the tier height: a
+// donut doesn't need as much vertical room as a wide category ranking,
+// while a scatter benefits from a slightly taller, more square-ish area.
+// Horizontal product-style bar charts still grow modestly with category
+// count inside ChartRenderer, but only up to its own hard ceiling (see
+// the "card" variant there) -- this value is a floor/starting point, not
+// something that can compound into an unbounded card height anymore.
+function resolveHeight(tier: ChartCardTier, chartType: ChartSpec["chart_type"]): number {
+  const base = TIER_HEIGHT[tier]
+  switch (chartType) {
+    case "pie":
+      return Math.min(base, 260)
+    case "scatter":
+      return Math.max(base, 300)
+    default:
+      return base
+  }
+}
+
 const TIER_TITLE_CLASS: Record<ChartCardTier, string> = {
   primary: "text-base",
   secondary: "text-sm",
@@ -57,7 +76,7 @@ export function ChartCard({
           : undefined
       }
       className={
-        "relative flex h-full flex-col overflow-hidden py-0 pt-1 transition-all duration-200" +
+        "relative flex flex-col overflow-hidden py-0 pt-1 transition-all duration-200" +
         (onClick
           ? " cursor-pointer hover:-translate-y-0.5 hover:border-primary/50 hover:bg-accent/40 hover:shadow-lg focus-visible:ring-ring/50 focus-visible:ring-2 focus-visible:outline-none"
           : "")
@@ -76,7 +95,7 @@ export function ChartCard({
         </CardDescription>
       </CardHeader>
       <CardContent className="flex-1 pb-6">
-        <ChartRenderer chart={chart} height={TIER_HEIGHT[tier]} />
+        <ChartRenderer chart={chart} height={resolveHeight(tier, chart.chart_type)} variant="card" />
       </CardContent>
     </Card>
   )

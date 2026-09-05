@@ -26,13 +26,13 @@ interface ColorSet {
 }
 
 const COLOR_SETS: Record<ColorKind, ColorSet> = {
-  sales: { text: "text-sky-400", bg: "bg-sky-400/10", hex: "#38bdf8" },
-  profit: { text: "text-violet-400", bg: "bg-violet-400/10", hex: "#a78bfa" },
-  quantity: { text: "text-indigo-400", bg: "bg-indigo-400/10", hex: "#818cf8" },
-  discount: { text: "text-amber-400", bg: "bg-amber-400/10", hex: "#fbbf24" },
-  orders: { text: "text-teal-400", bg: "bg-teal-400/10", hex: "#2dd4bf" },
-  average: { text: "text-orange-400", bg: "bg-orange-400/10", hex: "#fb923c" },
-  generic: { text: "text-slate-400", bg: "bg-slate-400/10", hex: "#94a3b8" },
+  sales: { text: "text-sky-300", bg: "bg-sky-400/15", hex: "#22d3ee" },
+  profit: { text: "text-violet-300", bg: "bg-violet-400/15", hex: "#c084fc" },
+  quantity: { text: "text-indigo-300", bg: "bg-indigo-400/15", hex: "#818cf8" },
+  discount: { text: "text-amber-300", bg: "bg-amber-400/15", hex: "#fbbf24" },
+  orders: { text: "text-emerald-300", bg: "bg-emerald-400/15", hex: "#34d399" },
+  average: { text: "text-orange-300", bg: "bg-orange-400/15", hex: "#fb923c" },
+  generic: { text: "text-slate-300", bg: "bg-slate-400/15", hex: "#94a3b8" },
 }
 
 export function getColorSet(kind: ColorKind): ColorSet {
@@ -53,12 +53,22 @@ export function inferChartColorKind(text: string): ColorKind {
 }
 
 /** A small rotating palette for multi-series charts (pie slices, category
- * breakdowns) where every bar/slice needs its own distinct color. */
+ * breakdowns) where every bar/slice needs its own distinct color.
+ * A controlled "premium neon" set -- saturated enough to pop against the
+ * dark theme without tipping into a childish/candy look. Assignment is
+ * always by array position (chart data index), so it stays deterministic
+ * across renders rather than randomized. */
 export const CATEGORY_PALETTE = [
-  "#38bdf8", // sky
-  "#a78bfa", // violet
-  "#2dd4bf", // teal
-  "#fb923c", // orange
-  "#f472b6", // pink
-  "#facc15", // yellow
+  "#22d3ee", // electric cyan
+  "#a855f7", // vivid violet
+  "#34d399", // neon emerald
+  "#fb923c", // vibrant orange
+  "#f472b6", // hot magenta/pink
+  "#facc15", // vivid amber/yellow
+  "#60a5fa", // electric blue
+  "#2dd4bf", // bright teal
 ]
+
+/** Muted, deliberately desaturated color for an "Other" aggregation bucket
+ * -- must never be mistaken for one of the vivid real-category colors. */
+export const OTHER_BUCKET_COLOR = "#64748b"

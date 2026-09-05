@@ -49,14 +49,24 @@ _SUM_NAME_HINTS = (
 TOP_K_DIMENSIONS = 4
 TOP_K_METRICS = 4
 TOP_K_HIGH_CARDINALITY_DIMENSIONS = 2
-TOP_N_HIGH_CARDINALITY_CATEGORIES = 10
+# How many distinct values a "Top N Products"-style breakdown sends back.
+# Deliberately generous (not just "however many fit on a dashboard card")
+# -- the dashboard CARD only ever renders a compact slice of this on
+# screen (see frontend ChartRenderer's card-vs-detail variant), while the
+# full-size detail modal shows more of it. Sending a rich set here is what
+# makes "see the complete data in the detail view" possible at all.
+TOP_N_HIGH_CARDINALITY_CATEGORIES = 50
 MIN_DIMENSION_SCORE_FOR_HIGH_CARDINALITY = 2.0  # e.g. "Product" qualifies, a random free-text column does not
 SCATTER_MIN_CORRELATION = 0.3
 SCATTER_MIN_CORRELATION_BOTH_IMPORTANT = 0.15
 # An "Other" bucket that would outweigh the largest individual category
-# hides more than it reveals -- in that case we show more individual
-# categories instead of folding into Other (see _rank_or_fold below).
-MAX_CATEGORIES_HARD_CAP = 20
+# hides more than it reveals -- in that case we show every individual
+# category instead of folding into Other (see _fold_into_other below).
+# Not capped at a small number: a dashboard CARD showing 20+ bars would be
+# a real problem, but that's a display concern the frontend owns (it caps
+# how many of these it actually renders in a compact card); the backend's
+# job is just to not silently discard real data.
+MAX_CATEGORIES_HARD_CAP = 60
 
 
 @dataclass
@@ -197,6 +207,49 @@ def _category_proportion_pie(
     )
 
 
+def _category_measure_pie(
+    df: pd.DataFrame, cat_col: str, num_col: str, chart_id: str, dim_score: float, met_score: float
+) -> Optional[ChartSpec]:
+    """A metric-weighted donut -- e.g. 'Sales by Category' showing each
+    category's SHARE OF TOTAL SALES, not just its row count. This is the
+    part-to-whole view (what fraction of revenue does each category own)
+    that a plain count-based pie can't answer, and is what makes a
+    category pie genuinely useful on a dashboard rather than decorative.
+    """
+    agg = _pick_aggregation(num_col)
+    grouped = df.groupby(cat_col, dropna=True)[num_col].agg(agg)
+    grouped = grouped.dropna().sort_values(ascending=False)
+    if grouped.empty or grouped.nunique() <= 1 or (grouped < 0).any():
+        # Negative values (e.g. a net-loss category) can't be shown as a
+        # meaningful pie slice -- fall back to no pie for this pairing.
+        return None
+    grouped.index = grouped.index.map(str)
+    pretty_metric = prettify(num_col)
+    pretty_dim = prettify(cat_col)
+    agg_label = "Total" if agg == "sum" else "Average"
+    data = [{"x": str(idx), "y": _clean(val)} for idx, val in grouped.items()]
+    cv = float(grouped.std()) / (abs(float(grouped.mean())) + 1e-9)
+    # Scored above the plain count-pie (which uses a 3.0 base) since a
+    # value-weighted share of a real business metric is more actionable
+    # than a share of raw row counts.
+    score = (5.0 + min(cv, 3.0)) * dim_score * met_score
+    return ChartSpec(
+        id=chart_id,
+        chart_type="pie",
+        title=f"{pretty_metric} by {pretty_dim}",
+        description=(
+            f"Share of {agg_label.lower()} '{pretty_metric}' contributed by each "
+            f"'{pretty_dim}', highlighting which values drive the most impact."
+        ),
+        x_label=pretty_dim,
+        y_label=f"{agg_label} {pretty_metric}",
+        data=data,
+        score=score,
+        dimension_column=cat_col,
+        metric_column=num_col,
+    )
+
+
 def _categorical_measure_bar(
     df: pd.DataFrame,
     cat_col: str,
@@ -240,7 +293,7 @@ def _categorical_measure_bar(
     # Customer_Login_type) should rank below a meaningful one even with a
     # smaller coefficient of variation.
     score = (4.0 + min(cv, 3.0)) * dim_score * met_score
-    title_suffix = " (Top 10)" if top_n_only else ""
+    title_suffix = f" (Top {len(shown)})" if top_n_only else ""
     return ChartSpec(
         id=chart_id,
         chart_type="bar",
@@ -454,7 +507,7 @@ def _select_diverse(candidates: List[ChartSpec], max_charts: int) -> List[ChartS
         "line": 2,
         "scatter": 2,
         "histogram": 2,
-        "pie": 1,
+        "pie": 2,
     }
     ranked = sorted(candidates, key=lambda c: c.score, reverse=True)
     selected: List[ChartSpec] = []
@@ -536,12 +589,25 @@ def generate_recommendations(df: pd.DataFrame) -> List[ChartSpec]:
     # 1) Category counts -- generated for the top-ranked groupable columns,
     #    independently of whether a numeric measure exists, so a
     #    categorical-only dataset still gets useful charts.
+    #    Pie/donut: prefer a metric-weighted "share of Sales by Category"
+    #    donut over a plain row-count pie when a real business metric
+    #    exists -- that's the analytically useful part-to-whole view. Falls
+    #    back to the count-based pie only when there's no numeric measure
+    #    to weight by (e.g. a categorical-only dataset).
     for col in top_dimensions:
         dim_score = dimension_importance(col)
         candidates.append(_category_counts_chart(df, col, next_id(), dim_score))
         distinct = df[col].nunique(dropna=True)
         if distinct <= settings.PIE_CHART_MAX_CATEGORIES:
-            candidates.append(_category_proportion_pie(df, col, next_id(), dim_score))
+            pie_spec = None
+            if top_metrics:
+                pie_spec = _category_measure_pie(
+                    df, col, top_metrics[0], next_id(),
+                    dim_score, metric_importance(top_metrics[0]),
+                )
+            if pie_spec is None:
+                pie_spec = _category_proportion_pie(df, col, next_id(), dim_score)
+            candidates.append(pie_spec)
 
     # 2) Categorical x numeric measure breakdowns, restricted to the
     #    top-ranked dimensions and metrics so the result is "Sales by
@@ -741,32 +807,55 @@ def generate_drilldown(
             spec.title = f"{current_value} \u2014 {prettify(primary_metric)} Over Time"
             trend_chart = spec.to_dict()
 
-    # A meaningful secondary breakdown must use a dimension not already
-    # pinned by one of the active filters -- otherwise every value in it
-    # would trivially be 100% of the subset, which is not analytically
-    # useful and would make a nonsensical drill-down target.
+    # A meaningful "what's driving this?" breakdown must use a dimension
+    # not already pinned by one of the active filters -- otherwise every
+    # value in it would trivially be 100% of the subset. It also needs to
+    # actually explain the CONTENTS of the current filter, not just
+    # restate it in a different shape: given Category="Fashion", "which
+    # Products make up Fashion" is a far more useful child analysis than
+    # "how does Fashion split by Gender" -- both are technically valid
+    # dimensions, but a low-cardinality demographic split barely qualifies
+    # as "drilling into the contents" the way a granular Product/Item/SKU
+    # breakdown does. Score candidates by BOTH business relevance (from
+    # semantic_rules) AND how much genuine detail they reveal within this
+    # specific filtered subset (their remaining cardinality here, not
+    # dataset-wide) -- so the more granular, more revealing dimension wins
+    # even when a broader one shares the same semantic importance tier.
     secondary_chart = None
     secondary_dimension_column = None
-    candidate_dims = [d for d in ranking.top_dimensions if d not in filtered_dims]
-    if not candidate_dims:
-        candidate_dims = [
-            d for d in ranking.important_hc_dimensions if d not in filtered_dims
-        ]
+    candidate_dims: List[str] = []
+    for d in ranking.top_dimensions + ranking.important_hc_dimensions:
+        if d not in filtered_dims and d not in candidate_dims:
+            candidate_dims.append(d)
+
+    def _child_dimension_score(dim: str) -> float:
+        distinct_here = subset[dim].nunique(dropna=True)
+        if distinct_here <= 1:
+            return -1.0  # dead end: filtering further wouldn't reveal anything
+        granularity_bonus = 1.0 + min(float(np.log1p(distinct_here)), 3.0)
+        return dimension_importance(dim) * granularity_bonus
+
+    candidate_dims = [d for d in candidate_dims if _child_dimension_score(d) > 0]
+    candidate_dims.sort(key=_child_dimension_score, reverse=True)
+
     if candidate_dims and ranking.top_metrics:
         second_dim = candidate_dims[0]
         primary_metric = ranking.top_metrics[0]
-        # Only offer a further drill-down level if the subset actually has
-        # more than one distinct value left in that dimension -- drilling
-        # into a dimension with a single remaining value is a dead end.
-        if subset[second_dim].nunique(dropna=True) > 1:
-            spec = _categorical_measure_bar(
-                subset, second_dim, primary_metric, "drilldown_secondary",
-                dimension_importance(second_dim), metric_importance(primary_metric),
+        is_high_cardinality = second_dim in ranking.important_hc_dimensions
+        spec = _categorical_measure_bar(
+            subset, second_dim, primary_metric, "drilldown_secondary",
+            dimension_importance(second_dim), metric_importance(primary_metric),
+            top_n_only=is_high_cardinality,
+        )
+        if spec is not None:
+            spec.title = f"{prettify(second_dim)} Breakdown Within {current_value}"
+            spec.description = (
+                f"Which values of '{prettify(second_dim)}' contribute most to "
+                f"'{prettify(primary_metric)}' within {current_dim} = \"{current_value}\", "
+                f"showing what's actually driving this selection's numbers."
             )
-            if spec is not None:
-                spec.title = f"{current_value} by {prettify(second_dim)}"
-                secondary_chart = spec.to_dict()
-                secondary_dimension_column = second_dim
+            secondary_chart = spec.to_dict()
+            secondary_dimension_column = second_dim
 
     return {
         "dimension": current_dim,

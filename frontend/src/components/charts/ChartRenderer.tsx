@@ -14,7 +14,7 @@ import {
   XAxis,
   YAxis,
 } from "recharts"
-import { CATEGORY_PALETTE, getColorSet, inferChartColorKind } from "@/lib/chartColors"
+import { CATEGORY_PALETTE, getColorSet, inferChartColorKind, OTHER_BUCKET_COLOR } from "@/lib/chartColors"
 import { formatDateLabel, formatNumberCompact, formatNumberFull } from "@/lib/format"
 import type { ChartSpec } from "@/types/dataset"
 
@@ -22,8 +22,8 @@ const AXIS_TICK_STYLE = { fontSize: 12, fill: "var(--muted-foreground)" }
 const CHART_MARGIN = { top: 8, right: 12, left: 4, bottom: 8 }
 const ANIMATION_DURATION = 400
 
-const HISTOGRAM_COLOR = "#2dd4bf" // teal, per "distribution -> green/teal" convention
-const SCATTER_COLOR = "#a78bfa" // violet, per "relationship -> cyan/purple" convention
+const HISTOGRAM_COLOR = "#2dd4bf" // bright teal, per "distribution -> green/teal" convention
+const SCATTER_COLOR = "#c084fc" // vivid violet, per "relationship -> cyan/purple" convention
 const RANGE_DASH = "\u2013"
 
 function truncateLabel(value: unknown, max = 14): string {
@@ -61,7 +61,7 @@ function TooltipCard({
   active?: boolean
   payload?: TooltipPayloadItem[]
   label?: string | number
-  variant?: "default" | "histogram" | "scatter" | "date"
+  variant?: "default" | "histogram" | "scatter" | "date" | "pie"
 }) {
   if (!active || !payload?.length) return null
   const datum = payload[0]?.payload
@@ -96,6 +96,18 @@ function TooltipCard({
     )
   }
 
+  if (variant === "pie" && datum) {
+    return (
+      <div className="rounded-md border bg-popover px-3 py-2 text-xs text-popover-foreground shadow-md">
+        <p className="mb-1 font-medium">{String(datum.fullLabel ?? datum.label)}</p>
+        <p className="text-muted-foreground">Value: {formatNumberFull(datum.value)}</p>
+        {typeof datum.percent === "number" && (
+          <p className="text-muted-foreground">Share: {datum.percent}%</p>
+        )}
+      </div>
+    )
+  }
+
   const displayLabel =
     label !== undefined ? (variant === "date" ? formatDateLabel(label) : String(label)) : undefined
 
@@ -120,6 +132,7 @@ export function ChartRenderer({
   chart,
   height = 260,
   onCategoryClick,
+  variant = "card",
 }: {
   chart: ChartSpec
   height?: number
@@ -128,6 +141,15 @@ export function ChartRenderer({
    * chart.chart_type === "bar" and chart.dimension_column is set — the
    * caller is responsible for deciding whether to react to it. */
   onCategoryClick?: (rawValue: string) => void
+  /** "card" (default): compact dashboard-tile rendering -- caps how many
+   * bars a high-cardinality breakdown actually draws and how tall the
+   * card can grow, regardless of how much data the chart carries, so a
+   * 42-category breakdown can't blow up into a 1000px-tall card next to
+   * short ones. "detail": the large ChartDetailModal view -- allows
+   * meaningfully more bars and height since that's the place explicitly
+   * meant to show the fuller picture. Neither variant discards data on
+   * the backend side; this only controls how much of it gets drawn. */
+  variant?: "card" | "detail"
 }) {
   const isDrillable = chart.chart_type === "bar" && Boolean(chart.dimension_column) && Boolean(onCategoryClick)
   const semanticColor = getColorSet(inferChartColorKind(`${chart.title} ${chart.y_label}`)).hex
@@ -146,49 +168,76 @@ export function ChartRenderer({
         percent: d.percent,
       }))
       const barColor = isHistogram ? HISTOGRAM_COLOR : semanticColor
+      const barCellColor = (i: number) =>
+        data[i]?.rawX === "Other" ? OTHER_BUCKET_COLOR : CATEGORY_PALETTE[i % CATEGORY_PALETTE.length]
 
       // High-cardinality dimension breakdowns (e.g. "Total Sales by
-      // Product (Top 10)") read far better as horizontal bars: product
-      // names get full-width room instead of being rotated/truncated
-      // under a crowded x-axis.
+      // Product") read far better as horizontal bars: product names get
+      // full-width room instead of being rotated/truncated under a
+      // crowded x-axis.
       const isHorizontal = !isHistogram && Boolean(chart.dimension_column) && data.length > 6
       if (isHorizontal) {
-        const longestLabel = Math.max(...data.map((d) => d.label.length), 4)
+        // The card is a small dashboard tile -- it must NEVER grow
+        // without bound just because a dimension happens to have 40+
+        // distinct values (that was the actual bug: card height scaled
+        // linearly with category count with no ceiling). The full data
+        // is still on `chart` for the caller to use elsewhere (the detail
+        // modal); this only limits what gets DRAWN in this render.
+        const maxBars = variant === "card" ? 10 : 25
+        const maxCardHeight = variant === "card" ? 400 : 640
+        const shown = data.slice(0, maxBars)
+        const hiddenCount = data.length - shown.length
+
+        const longestLabel = Math.max(...shown.map((d) => d.label.length), 4)
         const yAxisWidth = Math.min(160, Math.max(70, longestLabel * 7))
-        const rowHeight = 32
-        const dynamicHeight = Math.max(height, data.length * rowHeight + 40)
+        const rowHeight = 30
+        const dynamicHeight = Math.min(
+          maxCardHeight,
+          Math.max(height, shown.length * rowHeight + 40)
+        )
         return (
-          <ResponsiveContainer width="100%" height={dynamicHeight}>
-            <BarChart data={data} layout="vertical" margin={CHART_MARGIN}>
-              <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" horizontal={false} />
-              <XAxis type="number" tick={AXIS_TICK_STYLE} tickFormatter={numericTickFormatter} />
-              <YAxis
-                type="category"
-                dataKey="label"
-                tick={AXIS_TICK_STYLE}
-                width={yAxisWidth}
-              />
-              <Tooltip content={<TooltipCard />} cursor={{ fill: "var(--muted)" }} />
-              <Bar
-                dataKey="value"
-                fill={barColor}
-                radius={[0, 4, 4, 0]}
-                isAnimationActive
-                animationDuration={ANIMATION_DURATION}
-                cursor={isDrillable ? "pointer" : undefined}
-                onClick={
-                  isDrillable
-                    ? (entry: BarClickPayload) => {
-                        const raw = entry?.rawX ?? entry?.payload?.rawX
-                        if (raw !== undefined && raw !== null && onCategoryClick) {
-                          onCategoryClick(String(raw))
+          <div>
+            <ResponsiveContainer width="100%" height={dynamicHeight}>
+              <BarChart data={shown} layout="vertical" margin={CHART_MARGIN}>
+                <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" horizontal={false} />
+                <XAxis type="number" tick={AXIS_TICK_STYLE} tickFormatter={numericTickFormatter} />
+                <YAxis
+                  type="category"
+                  dataKey="label"
+                  tick={AXIS_TICK_STYLE}
+                  width={yAxisWidth}
+                />
+                <Tooltip content={<TooltipCard />} cursor={{ fill: "var(--muted)" }} />
+                <Bar
+                  dataKey="value"
+                  fill={barColor}
+                  radius={[0, 4, 4, 0]}
+                  isAnimationActive
+                  animationDuration={ANIMATION_DURATION}
+                  cursor={isDrillable ? "pointer" : undefined}
+                  onClick={
+                    isDrillable
+                      ? (entry: BarClickPayload) => {
+                          const raw = entry?.rawX ?? entry?.payload?.rawX
+                          if (raw !== undefined && raw !== null && onCategoryClick) {
+                            onCategoryClick(String(raw))
+                          }
                         }
-                      }
-                    : undefined
-                }
-              />
-            </BarChart>
-          </ResponsiveContainer>
+                      : undefined
+                  }
+                >
+                  {!isHistogram &&
+                    shown.map((_, i) => <Cell key={i} fill={barCellColor(i)} />)}
+                </Bar>
+              </BarChart>
+            </ResponsiveContainer>
+            {hiddenCount > 0 && (
+              <p className="mt-1 text-center text-[10px] text-muted-foreground">
+                Showing top {shown.length} of {data.length}
+                {variant === "card" ? " — open detail view for more" : ""}
+              </p>
+            )}
+          </div>
         )
       }
 
@@ -199,10 +248,11 @@ export function ChartRenderer({
             <XAxis
               dataKey="label"
               tick={AXIS_TICK_STYLE}
+              tickFormatter={isHistogram ? undefined : (v: string) => truncateLabel(v, 10)}
               interval={adaptiveTickInterval(data.length)}
-              angle={data.length > 6 ? -30 : 0}
-              textAnchor={data.length > 6 ? "end" : "middle"}
-              height={data.length > 6 ? 50 : 24}
+              angle={data.length > 4 ? -30 : 0}
+              textAnchor={data.length > 4 ? "end" : "middle"}
+              height={data.length > 4 ? 52 : 24}
             />
             <YAxis tick={AXIS_TICK_STYLE} width={52} tickFormatter={numericTickFormatter} />
             <Tooltip
@@ -226,7 +276,10 @@ export function ChartRenderer({
                     }
                   : undefined
               }
-            />
+            >
+              {!isHistogram &&
+                data.map((_, i) => <Cell key={i} fill={barCellColor(i)} />)}
+            </Bar>
           </BarChart>
         </ResponsiveContainer>
       )
@@ -269,27 +322,59 @@ export function ChartRenderer({
     }
 
     case "pie": {
-      const data = chart.data.map((d) => ({ label: truncateLabel(d.x), value: d.y }))
+      const raw = chart.data.map((d) => ({
+        label: truncateLabel(d.x, 20),
+        fullLabel: String(d.x),
+        value: typeof d.y === "number" ? d.y : 0,
+      }))
+      const total = raw.reduce((sum, d) => sum + d.value, 0)
+      const withPercent = raw.map((d) => ({
+        ...d,
+        percent: total > 0 ? Math.round((d.value / total) * 1000) / 10 : 0,
+      }))
       return (
-        <ResponsiveContainer width="100%" height={height}>
-          <PieChart margin={CHART_MARGIN}>
-            <Pie
-              data={data}
-              dataKey="value"
-              nameKey="label"
-              innerRadius={50}
-              outerRadius={90}
-              paddingAngle={2}
-              isAnimationActive
-              animationDuration={ANIMATION_DURATION}
-            >
-              {data.map((_, i) => (
-                <Cell key={i} fill={CATEGORY_PALETTE[i % CATEGORY_PALETTE.length]} />
-              ))}
-            </Pie>
-            <Tooltip content={<TooltipCard />} />
-          </PieChart>
-        </ResponsiveContainer>
+        <div className="flex h-full flex-col gap-3 sm:flex-row sm:items-center">
+          <div className="sm:w-1/2 sm:shrink-0">
+            <ResponsiveContainer width="100%" height={height}>
+              <PieChart margin={CHART_MARGIN}>
+                <Pie
+                  data={withPercent}
+                  dataKey="value"
+                  nameKey="label"
+                  innerRadius="55%"
+                  outerRadius="85%"
+                  paddingAngle={2}
+                  isAnimationActive
+                  animationDuration={ANIMATION_DURATION}
+                >
+                  {withPercent.map((_, i) => (
+                    <Cell key={i} fill={CATEGORY_PALETTE[i % CATEGORY_PALETTE.length]} />
+                  ))}
+                </Pie>
+                <Tooltip content={<TooltipCard variant="pie" />} />
+              </PieChart>
+            </ResponsiveContainer>
+          </div>
+          <ul className="min-w-0 flex-1 space-y-2 text-xs">
+            {withPercent.map((d, i) => (
+              <li key={i} className="flex items-center justify-between gap-3">
+                <span className="flex min-w-0 items-center gap-1.5">
+                  <span
+                    className="h-2.5 w-2.5 shrink-0 rounded-full"
+                    style={{ background: CATEGORY_PALETTE[i % CATEGORY_PALETTE.length] }}
+                  />
+                  <span className="truncate" title={d.fullLabel}>
+                    {d.label}
+                  </span>
+                </span>
+                <span className="shrink-0 tabular-nums text-muted-foreground">
+                  {formatNumberCompact(d.value)}
+                  <span className="ml-1.5 text-foreground/70">{d.percent}%</span>
+                </span>
+              </li>
+            ))}
+          </ul>
+        </div>
       )
     }
 

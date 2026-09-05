@@ -307,6 +307,7 @@ export function ChartDetailModal({
                       : chart
                   }
                   height={420}
+                  variant="detail"
                   onCategoryClick={
                     chart.chart_type === "bar" && chart.dimension_column
                       ? handleOverviewCategoryClick
@@ -385,26 +386,15 @@ function DrilldownView({
         {data.row_count.toLocaleString()} matching rows.
       </p>
 
+      {/* The child breakdown (what's actually inside this selection) is
+          the main analytical content at this level -- "which products
+          make up Fashion" answers a real question; the aggregate KPIs
+          above only answer "how much did Fashion sell". It gets the wide
+          primary slot; the trend line is the smaller companion. */}
       <div className="grid gap-4 lg:grid-cols-3">
-        {trend && (
-          <div className="lg:col-span-2 rounded-lg border p-4">
-            <p className="mb-2 text-sm font-medium">{trend.title}</p>
-            <div key={rangeKey} className="animate-chart-in">
-              <ChartRenderer
-                chart={hasDateFilter ? { ...trend, data: filteredTrendData } : trend}
-                height={300}
-              />
-            </div>
-            {hasDateFilter && filteredTrendData.length === 0 && (
-              <div className="mt-2 flex h-16 items-center justify-center rounded-md border border-dashed text-xs text-muted-foreground">
-                No data in the selected date range.
-              </div>
-            )}
-          </div>
-        )}
         {data.secondary_chart && (
-          <div className={trend ? "lg:col-span-1 rounded-lg border p-4" : "lg:col-span-3 rounded-lg border p-4"}>
-            <p className="mb-2 text-sm font-medium">{data.secondary_chart.title}</p>
+          <div className={trend ? "lg:col-span-2 rounded-lg border p-4" : "lg:col-span-3 rounded-lg border p-4"}>
+            <p className="mb-1 text-sm font-medium">{data.secondary_chart.title}</p>
             {secondaryIsDrillable && (
               <p className="mb-2 text-[11px] text-muted-foreground">
                 Click a bar to drill in further.
@@ -412,9 +402,27 @@ function DrilldownView({
             )}
             <ChartRenderer
               chart={data.secondary_chart}
-              height={260}
+              height={secondaryIsDrillable ? 340 : 300}
+              variant="detail"
               onCategoryClick={secondaryIsDrillable ? onSecondaryCategoryClick : undefined}
             />
+          </div>
+        )}
+        {trend && (
+          <div className={data.secondary_chart ? "lg:col-span-1 rounded-lg border p-4" : "lg:col-span-3 rounded-lg border p-4"}>
+            <p className="mb-2 text-sm font-medium">{trend.title}</p>
+            <div key={rangeKey} className="animate-chart-in">
+              <ChartRenderer
+                chart={hasDateFilter ? { ...trend, data: filteredTrendData } : trend}
+                height={data.secondary_chart ? 260 : 300}
+                variant="detail"
+              />
+            </div>
+            {hasDateFilter && filteredTrendData.length === 0 && (
+              <div className="mt-2 flex h-16 items-center justify-center rounded-md border border-dashed text-xs text-muted-foreground">
+                No data in the selected date range.
+              </div>
+            )}
           </div>
         )}
         {!trend && !data.secondary_chart && (
