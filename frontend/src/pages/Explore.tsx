@@ -4,16 +4,23 @@ import { PageHeader } from "@/components/shared/PageHeader"
 import { EmptyState } from "@/components/shared/EmptyState"
 import { Button } from "@/components/ui/button"
 import { RecommendationsGrid } from "@/components/charts/RecommendationsGrid"
+import { DomainHeader } from "@/components/intelligence/DomainHeader"
+import { EntityBadges } from "@/components/intelligence/EntityBadges"
+import { ValidationBanner } from "@/components/intelligence/ValidationBanner"
+import { UniversalStatsViewer } from "@/components/intelligence/UniversalStatsViewer"
+import { DecisionDashboard } from "@/components/intelligence/DecisionDashboard"
 import { useActiveDataset } from "@/context/DatasetContext"
+import { useDomainIntelligence } from "@/hooks/useDomainIntelligence"
 
 export default function Explore() {
   const { activeDataset } = useActiveDataset()
+  const intelState = useDomainIntelligence(activeDataset?.dataset_id ?? null)
 
   return (
     <div className="space-y-6">
       <PageHeader
-        title="Analytics Overview"
-        description="AI-generated insights and visualizations from your uploaded dataset — no manual chart setup required."
+        title="Decision Analytics & Intelligence"
+        description="Real-world, decision-oriented analytics answering core business questions with dataset-aware metric validation."
       />
 
       {!activeDataset ? (
@@ -30,10 +37,27 @@ export default function Explore() {
           </div>
         </div>
       ) : (
-        <RecommendationsGrid
-          datasetId={activeDataset.dataset_id}
-          datasetName={activeDataset.filename}
-        />
+        <div className="space-y-6">
+          {intelState.status === "success" && (
+            <div className="space-y-6">
+              <ValidationBanner report={intelState.data.validation_report} />
+              <DomainHeader domain={intelState.data.domain} />
+              <EntityBadges entities={intelState.data.entities} />
+              <DecisionDashboard dashboard={intelState.data.decision_dashboard} />
+              <UniversalStatsViewer statistics={intelState.data.universal_statistics} />
+            </div>
+          )}
+
+          <div className="pt-4 border-t border-border">
+            <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider mb-4">
+              Supplementary Exploratory Charts & Drilldown
+            </h3>
+            <RecommendationsGrid
+              datasetId={activeDataset.dataset_id}
+              datasetName={activeDataset.filename}
+            />
+          </div>
+        </div>
       )}
     </div>
   )

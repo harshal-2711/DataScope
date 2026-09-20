@@ -87,3 +87,45 @@ export async function fetchDrilldown(
     "Could not load a detailed breakdown for that selection."
   )
 }
+
+export async function fetchDomainIntelligence(
+  datasetId: string
+): Promise<import("@/types/intelligence").DomainIntelligenceResponse> {
+  let res: Response
+  try {
+    res = await fetch(
+      `${API_BASE_URL}/api/dataset/${encodeURIComponent(datasetId)}/intelligence`
+    )
+  } catch {
+    throw new Error(
+      "Could not reach the backend. Make sure the server is running on " +
+        API_BASE_URL
+    )
+  }
+
+  return unwrapOrThrow<import("@/types/intelligence").DomainIntelligenceResponse>(
+    res,
+    "Domain intelligence could not be generated for this dataset."
+  )
+}
+
+export async function fetchDecisionDashboard(
+  datasetId: string
+): Promise<import("@/types/intelligence").DecisionDashboardResponse> {
+  let res: Response
+  try {
+    res = await fetch(
+      `${API_BASE_URL}/api/dataset/${encodeURIComponent(datasetId)}/decision_dashboard`
+    )
+  } catch {
+    throw new Error(
+      "Could not reach the backend. Make sure the server is running on " +
+        API_BASE_URL
+    )
+  }
+
+  return unwrapOrThrow<import("@/types/intelligence").DecisionDashboardResponse>(
+    res,
+    "Decision dashboard could not be generated for this dataset."
+  )
+}

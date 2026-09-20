@@ -3,6 +3,7 @@ import json
 from fastapi import APIRouter, File, HTTPException, Query, UploadFile
 
 from app.schemas.dataset import DatasetSummary, DrilldownResponse, RecommendationsResponse
+from app.schemas.domain_blueprint import DecisionDashboardResponse, DomainIntelligenceResponse
 from app.services import dataset_service
 from app.services.dataset_exceptions import DatasetError
 
@@ -106,5 +107,47 @@ def get_dataset_drilldown(
 
     try:
         return dataset_service.get_drilldown(dataset_id, filter_pairs)
+    except DatasetError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
+
+
+@router.get(
+    "/dataset/{dataset_id}/intelligence", response_model=DomainIntelligenceResponse
+)
+def get_dataset_domain_intelligence(dataset_id: str) -> dict:
+    """Return comprehensive domain intelligence, entities, KPIs, charts, trends,
+    comparisons, risks, and recommendations for a stored dataset."""
+    try:
+        return dataset_service.get_domain_intelligence(dataset_id)
+    except DatasetError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
+
+
+@router.get("/dataset/{dataset_id}/validation")
+def get_dataset_validation(dataset_id: str) -> dict:
+    """Return analysis validation and quality report (Valid, Needs Review, Unsupported)."""
+    try:
+        return dataset_service.get_validation_report(dataset_id)
+    except DatasetError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
+
+
+@router.get("/dataset/{dataset_id}/statistics")
+def get_dataset_statistics(dataset_id: str) -> dict:
+    """Return universal parametric and non-parametric statistics for any tabular dataset."""
+    try:
+        return dataset_service.get_universal_statistics(dataset_id)
+    except DatasetError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
+
+
+@router.get(
+    "/dataset/{dataset_id}/decision_dashboard",
+    response_model=DecisionDashboardResponse,
+)
+def get_dataset_decision_dashboard(dataset_id: str) -> dict:
+    """Return real-world, decision-oriented executive dashboard."""
+    try:
+        return dataset_service.get_decision_dashboard(dataset_id)
     except DatasetError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc

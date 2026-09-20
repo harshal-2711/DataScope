@@ -26,12 +26,32 @@ from app.services.dataset_exceptions import (
     UnreadableFileError,
     UnsupportedFileTypeError,
 )
+from app.domains.registry import get_blueprint_by_id, get_fallback_blueprint
+from app.schemas.domain_blueprint import DomainIdentitySchema
+from app.services.analysis_validator import run_analysis_quality_check
+from app.services.chart_engine import generate_domain_charts
+from app.services.column_profiler import profile_dataset
+from app.services.comparison_engine import compute_comparisons
+from app.services.domain_detector import detect_domain
+from app.services.entity_detector import detect_entities
+from app.services.field_validator import validate_blueprint_fields
+from app.services.insight_engine import generate_evidence_based_recommendations
+from app.services.kpi_engine import compute_domain_kpis
 from app.services.recommendation_engine import (
     compute_kpis,
     generate_drilldown,
     generate_recommendations,
     rank_columns,
 )
+from app.services.risk_engine import detect_risks_and_anomalies
+from app.services.sports_cricket_service import (
+    compute_cricket_ball_analytics,
+    compute_cricket_match_analytics,
+    detect_cricket_dataset_type,
+)
+from app.services.business_analytics_engine import generate_decision_dashboard
+from app.services.trend_engine import compute_trends
+from app.services.universal_stats import compute_universal_statistics
 
 
 def get_file_type(filename: str) -> str:
@@ -228,3 +248,139 @@ def get_drilldown(
         raise NoChartableColumnsError(f"No rows found for {described}.")
 
     return {"dataset_id": dataset_id, **result}
+
+
+def get_domain_intelligence(dataset_id: str) -> Dict[str, Any]:
+    """Execute the full 15-step domain intelligence pipeline on a stored dataset.
+
+    Returns the domain identity, detected entities, validated factual KPIs,
+    domain-tailored charts, comparisons, time trends, risk signals,
+    and evidence-based recommendations.
+    """
+    entry = dataset_store.get_dataset_or_raise(dataset_id)
+    df = entry.df
+
+    # 1. Profile dataset columns
+    profiles = profile_dataset(df)
+
+    # 2. Detect Domain Identity
+    domain = detect_domain(df, profiles)
+
+    # 3. Detect Entities
+    blueprint = get_blueprint_by_id(domain.domain_id) or get_fallback_blueprint()
+    entities = detect_entities(df, profiles, blueprint)
+
+    # 4. Validate Blueprint Fields & Rules
+    capabilities = validate_blueprint_fields(df, profiles, blueprint, entities)
+
+    # 5. Compute Factual KPIs
+    kpis = compute_domain_kpis(df, capabilities.kpis)
+
+    # 6. Generate Domain Charts
+    charts = generate_domain_charts(df, capabilities.charts)
+
+    # 7. Compute Comparisons
+    comparisons = compute_comparisons(df, capabilities.comparisons)
+
+    # 8. Compute Trends
+    trends = compute_trends(df, capabilities.trends)
+
+    # 9. Detect Statistical Risks & Anomalies
+    risks = detect_risks_and_anomalies(df, profiles, capabilities.risks)
+
+    # 10. Synthesize Evidence-based Recommendations
+    recommendations = generate_evidence_based_recommendations(
+        blueprint=blueprint,
+        kpis=kpis,
+        trends=trends,
+        risks=risks,
+        comparisons=comparisons,
+        entities=entities,
+    )
+
+    # Check for specialized Cricket / IPL structure
+    cricket_type = detect_cricket_dataset_type(df)
+    if cricket_type == "match_level":
+        domain = DomainIdentitySchema(
+            domain_id="sports",
+            name="Cricket / IPL Match Analytics",
+            description="IPL and Cricket match-level analytics, toss impact, venue breakdown, and team wins.",
+            confidence=0.96,
+            evidence=["Detected IPL match-level structure with team, toss, venue, and winner columns"],
+            alternative_domains=["Sports", "Sports Performance"],
+        )
+        cricket_res = compute_cricket_match_analytics(df)
+        kpis = cricket_res["kpis"] + kpis
+        charts = cricket_res["charts"] + charts
+    elif cricket_type == "ball_by_ball":
+        domain = DomainIdentitySchema(
+            domain_id="sports_performance",
+            name="Cricket / IPL Ball-by-Ball Analytics",
+            description="Ball-by-ball delivery analytics, batting strike rates, bowling wickets, and over-by-over progression.",
+            confidence=0.97,
+            evidence=["Detected IPL ball-by-ball structure with batsman, bowler, over, and runs columns"],
+            alternative_domains=["Sports", "Sports Performance"],
+        )
+        cricket_res = compute_cricket_ball_analytics(df)
+        kpis = cricket_res["kpis"] + kpis
+        charts = cricket_res["charts"] + charts
+
+    # 11. Compute Universal Statistics for the Dataset
+    universal_stats = compute_universal_statistics(df)
+
+    # 12. Run Analysis Validation & Quality Checker
+    validation_report = run_analysis_quality_check(
+        df=df,
+        domain=domain,
+        kpis=kpis,
+        charts=charts,
+        trends=trends,
+        risks=risks,
+        recommendations=recommendations,
+        skipped=capabilities.skipped,
+    )
+
+    # 13. Generate Real-World Decision-Oriented Dashboard
+    decision_dashboard = generate_decision_dashboard(df, domain, profiles)
+    decision_dashboard.dataset_id = dataset_id
+
+    def _to_dict(obj: Any) -> Dict[str, Any]:
+        return obj.model_dump() if hasattr(obj, "model_dump") else obj.dict()
+
+    return {
+        "dataset_id": dataset_id,
+        "domain": _to_dict(domain),
+        "entities": [_to_dict(e) for e in entities],
+        "kpis": [_to_dict(k) for k in kpis],
+        "charts": [_to_dict(c) for c in charts],
+        "comparisons": [_to_dict(cp) for cp in comparisons],
+        "trends": [_to_dict(t) for t in trends],
+        "risks": [_to_dict(r) for r in risks],
+        "recommendations": [_to_dict(rc) for rc in recommendations],
+        "skipped_analyses": [_to_dict(s) for s in capabilities.skipped],
+        "validation_report": validation_report,
+        "universal_statistics": universal_stats,
+        "decision_dashboard": _to_dict(decision_dashboard),
+    }
+
+
+def get_decision_dashboard(dataset_id: str) -> Dict[str, Any]:
+    """Return real-world, decision-oriented executive dashboard."""
+    entry = dataset_store.get_dataset_or_raise(dataset_id)
+    profiles = profile_dataset(entry.df)
+    domain = detect_domain(entry.df, profiles)
+    dashboard = generate_decision_dashboard(entry.df, domain, profiles)
+    dashboard.dataset_id = dataset_id
+    return dashboard.model_dump() if hasattr(dashboard, "model_dump") else dashboard.dict()
+
+
+def get_validation_report(dataset_id: str) -> Dict[str, Any]:
+    """Return the analysis validation and quality report for a dataset."""
+    intel = get_domain_intelligence(dataset_id)
+    return intel["validation_report"]
+
+
+def get_universal_statistics(dataset_id: str) -> Dict[str, Any]:
+    """Return comprehensive universal descriptive statistics for a dataset."""
+    entry = dataset_store.get_dataset_or_raise(dataset_id)
+    return compute_universal_statistics(entry.df)
