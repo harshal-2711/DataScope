@@ -41,6 +41,15 @@ export interface DomainChartSpec {
   data: Array<{ x: string | number | boolean | null; y: string | number | boolean | null }>
   business_question: string
   skip_reason?: string | null
+  analytical_question?: string | null
+  metric_definition?: string | null
+  unit?: string | null
+  grouping?: string | null
+  time_granularity?: string | null
+  dataset_grain?: string | null
+  data_coverage?: string | null
+  explanation?: string | null
+  limitations?: string | null
 }
 
 export interface ComparisonItem {
@@ -235,9 +244,31 @@ export interface DecisionDashboardResponse {
   insights_recommendations: DashboardSection
 }
 
+export interface DatasetGrain {
+  grain_type: string
+  grain_label: string
+  description: string
+  primary_entity_column?: string | null
+  row_count: number
+  unique_entity_count: number
+  repeated_observations_count: number
+  repetition_ratio: number
+  is_one_to_one: boolean
+  candidate_entities: Array<{
+    column: string
+    unique_count: number
+    uniqueness_ratio: number
+    is_unique_per_row: boolean
+  }>
+  measures: string[]
+  dimensions: string[]
+  aggregation_guardrails: string[]
+}
+
 export interface DomainIntelligenceResponse {
   dataset_id: string
   domain: DomainIdentity
+  dataset_grain?: DatasetGrain
   entities: DetectedEntity[]
   kpis: DomainKpi[]
   charts: DomainChartSpec[]
@@ -249,4 +280,235 @@ export interface DomainIntelligenceResponse {
   validation_report?: ValidationReport
   universal_statistics?: UniversalStatistics
   decision_dashboard?: DecisionDashboardResponse
+  data_quality_report?: DataQualityReportResponse
 }
+
+export interface TimeDimensionValidation {
+  has_time_dimension: boolean
+  time_column?: string | null
+  date_range?: {
+    min_date: string
+    max_date: string
+    total_days: number
+    observation_count: number
+  } | null
+  detected_frequency?: string | null
+  missing_dates_count: number
+  invalid_dates_count: number
+  duplicate_dates_count: number
+  has_irregular_intervals: boolean
+  quality_status: string
+  notes: string[]
+}
+
+export interface PeriodComparison {
+  current_period: string
+  previous_period: string
+  current_val: number
+  previous_val: number
+  absolute_change: number
+  pct_change: number | null
+  growth_direction: string
+  best_period?: string | null
+  best_val?: number | null
+  worst_period?: string | null
+  worst_val?: number | null
+}
+
+export interface TrendPoint {
+  date: string
+  formatted_date: string
+  value: number
+  moving_avg_3?: number | null
+  moving_avg_7?: number | null
+  is_spike: boolean
+  is_drop: boolean
+  anomaly_score?: number | null
+}
+
+export interface CategoryTrend {
+  category: string
+  previous_val: number
+  current_val: number
+  absolute_change: number
+  pct_change: number | null
+  direction: string
+  series: Array<{ date: string; value: number }>
+}
+
+export interface SpikeDrop {
+  date: string
+  value: number
+  expected_value: number
+  deviation_sigma: number
+  type: "spike" | "drop"
+  description: string
+}
+
+export interface PracticalTrendAnswers {
+  metric_analyzed: string
+  previous_value_text: string
+  current_value_text: string
+  absolute_change_text: string
+  pct_change_text: string
+  best_period_text: string
+  worst_period_text: string
+  categories_increased: string[]
+  categories_declined: string[]
+  stability_text: string
+  outliers_text: string
+  next_investigation_text: string
+}
+
+export interface MetricDescriptor {
+  column_name: string
+  display_name: string
+  description: string
+  semantic_type: string
+  group: string
+  recommended_aggregation: "sum" | "mean" | "median" | "count"
+  unit: string
+  confidence: number
+  missing_count: number
+  missing_percentage: number
+  data_availability: string
+  preview_value?: number | null
+  is_primary_recommendation: boolean
+  recommendation_reason?: string | null
+}
+
+export interface MetricContext {
+  metric_display_name: string
+  source_column: string
+  semantic_type: string
+  aggregation_method: string
+  time_column: string
+  time_granularity: string
+  records_included: number
+  records_excluded: number
+  missing_percentage: number
+  calculation_explanation: string
+  limitations: string[]
+}
+
+export interface TrendSummary {
+  trend_status: "Increasing" | "Decreasing" | "Stable" | "Fluctuating" | "Insufficient Data"
+  status_description: string
+  plain_english_summary: string
+  latest_period: string
+  latest_value: number
+  previous_period?: string | null
+  previous_value?: number | null
+  latest_change_absolute?: number | null
+  latest_change_pct?: number | null
+  overall_period_change_pct?: number | null
+  highest_period?: string | null
+  highest_value?: number | null
+  lowest_period?: string | null
+  lowest_value?: number | null
+  data_sufficiency: "Robust" | "Moderate" | "Limited" | "Insufficient"
+  data_sufficiency_note: string
+}
+
+export interface TrendsIntelligenceResponse {
+  dataset_id: string
+  has_time_dimension: boolean
+  time_validation: TimeDimensionValidation
+  metrics_catalog: MetricDescriptor[]
+  primary_metric?: string | null
+  primary_metric_reason?: string | null
+  selected_metric?: string | null
+  selected_metric_descriptor?: MetricDescriptor | null
+  metric_context?: MetricContext | null
+  trend_summary?: TrendSummary | null
+  what_this_chart_tells_you: string[]
+  metric_interpretation?: string | null
+  available_metrics: string[]
+  available_categories: string[]
+  selected_granularity: string
+  available_granularities: string[]
+  period_comparison?: PeriodComparison | null
+  volatility_cv?: number | null
+  stability_rating: string
+  time_series: TrendPoint[]
+  category_trends: CategoryTrend[]
+  spikes_and_drops: SpikeDrop[]
+  practical_answers?: PracticalTrendAnswers | null
+  limitations: string[]
+}
+
+export interface ForecastPoint {
+  period: string
+  forecast: number
+  lower_bound_80: number
+  upper_bound_80: number
+  lower_bound_95: number
+  upper_bound_95: number
+}
+
+export interface HistoricalPoint {
+  period: string
+  actual: number
+}
+
+export interface ForecastResponse {
+  dataset_id: string
+  is_available: boolean
+  unavailable_reason?: string | null
+  metric?: string | null
+  time_column?: string | null
+  horizon: number
+  method_used: string
+  historical_points: HistoricalPoint[]
+  forecast_points: ForecastPoint[]
+  projected_growth_pct?: number | null
+  accuracy_metrics: {
+    mape?: number | null
+    rmse?: number | null
+    mae?: number | null
+  }
+  confidence_score: number
+  limitations: string[]
+  disclaimer: string
+}
+
+export interface DataQualityCheck {
+  id: string
+  name: string
+  category: string
+  status: "Pass" | "Warning" | "Critical"
+  severity: "info" | "warning" | "critical"
+  affected_columns: string[]
+  message: string
+  recommendation: string
+}
+
+export interface ColumnQualityDiagnostic {
+  column_name: string
+  dtype: string
+  total_count: number
+  missing_count: number
+  missing_pct: number
+  unique_count: number
+  duplicate_count: number
+  negative_count: number
+  zero_count: number
+  outlier_count: number
+  issues: string[]
+}
+
+export interface DataQualityReportResponse {
+  dataset_id: string
+  overall_score: number
+  status: "Healthy" | "Warning" | "Critical"
+  summary: string
+  issue_counts: {
+    critical: number
+    warning: number
+    info: number
+  }
+  checks: DataQualityCheck[]
+  column_diagnostics: Record<string, ColumnQualityDiagnostic>
+  recommendations: string[]
+}
+

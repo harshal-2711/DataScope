@@ -3,7 +3,13 @@ import json
 from fastapi import APIRouter, File, HTTPException, Query, UploadFile
 
 from app.schemas.dataset import DatasetSummary, DrilldownResponse, RecommendationsResponse
-from app.schemas.domain_blueprint import DecisionDashboardResponse, DomainIntelligenceResponse
+from app.schemas.domain_blueprint import (
+    DataQualityReportResponse,
+    DecisionDashboardResponse,
+    DomainIntelligenceResponse,
+    ForecastResponse,
+    TrendsIntelligenceResponse,
+)
 from app.services import dataset_service
 from app.services.dataset_exceptions import DatasetError
 
@@ -151,3 +157,60 @@ def get_dataset_decision_dashboard(dataset_id: str) -> dict:
         return dataset_service.get_decision_dashboard(dataset_id)
     except DatasetError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
+
+
+@router.get(
+    "/dataset/{dataset_id}/trends",
+    response_model=TrendsIntelligenceResponse,
+)
+def get_dataset_trends(
+    dataset_id: str,
+    granularity: str = Query("auto", description="Time granularity: 'auto', 'D', 'W', 'M', 'Q', or 'Y'"),
+    metric: str = Query(None, description="Continuous numeric metric to aggregate over time"),
+    category_col: str = Query(None, description="Categorical dimension for segment breakdown over time"),
+) -> dict:
+    """Return comprehensive time-series trends intelligence, period comparisons, volatility, and spikes."""
+    try:
+        return dataset_service.get_trends_intelligence(
+            dataset_id=dataset_id,
+            granularity=granularity,
+            metric=metric,
+            category_col=category_col,
+        )
+    except DatasetError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
+
+
+@router.get(
+    "/dataset/{dataset_id}/forecast",
+    response_model=ForecastResponse,
+)
+def get_dataset_forecast(
+    dataset_id: str,
+    horizon: int = Query(6, ge=1, le=24, description="Forecast horizon in time periods (1-24)"),
+    metric: str = Query(None, description="Continuous numeric metric to forecast"),
+    granularity: str = Query(None, description="Time aggregation granularity ('D', 'W', 'M', 'Q', 'Y')"),
+) -> dict:
+    """Return statistical time-series forecast with confidence intervals and limitations."""
+    try:
+        return dataset_service.get_forecast(
+            dataset_id=dataset_id,
+            horizon=horizon,
+            metric=metric,
+            granularity=granularity,
+        )
+    except DatasetError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
+
+
+@router.get(
+    "/dataset/{dataset_id}/data_quality",
+    response_model=DataQualityReportResponse,
+)
+def get_dataset_data_quality(dataset_id: str) -> dict:
+    """Return comprehensive data quality and hygiene validation report."""
+    try:
+        return dataset_service.get_data_quality_report(dataset_id)
+    except DatasetError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
+

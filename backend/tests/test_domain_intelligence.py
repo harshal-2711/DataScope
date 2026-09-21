@@ -19,12 +19,14 @@ from app.services.trend_engine import compute_trends
 class TestDomainIntelligence(unittest.TestCase):
 
     def test_registry_contains_75_domains(self):
-        """Verify that all 75 domains are registered in the registry."""
+        """Verify that all registered domains exist in the registry."""
         blueprints = get_all_blueprints()
-        self.assertEqual(len(blueprints), 75)
+        self.assertGreaterEqual(len(blueprints), 75)
         # Ensure key domains exist
         self.assertIsNotNone(get_blueprint_by_id("retail"))
         self.assertIsNotNone(get_blueprint_by_id("ecommerce"))
+        self.assertIsNotNone(get_blueprint_by_id("government_procurement"))
+        self.assertIsNotNone(get_blueprint_by_id("government_finance"))
         self.assertIsNotNone(get_blueprint_by_id("healthcare"))
         self.assertIsNotNone(get_blueprint_by_id("hospital_management"))
         self.assertIsNotNone(get_blueprint_by_id("saas_subscription"))

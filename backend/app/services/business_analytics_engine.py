@@ -127,6 +127,26 @@ def generate_decision_dashboard(
     domain_id = domain.domain_id.lower()
     cols_lower = [str(c).lower() for c in df.columns]
 
+    # 0. Procurement & Government Tenders
+    has_procurement_cols = any(
+        c in cols_lower
+        for c in (
+            "tender",
+            "tender_id",
+            "tender_value",
+            "procurement",
+            "contract_value",
+            "bidder",
+            "tenderer",
+            "procurement_method",
+            "contracting_authority",
+            "award_date",
+            "tender_duration",
+        )
+    )
+    if "procurement" in domain_id or "tender" in domain_id or has_procurement_cols:
+        return _build_procurement_dashboard(df, domain, profiles)
+
     # 1. Social Media
     has_social_cols = any(c in cols_lower for c in ("likes", "retweets", "shares", "followers", "post_type", "reactions", "reposts"))
     if "social" in domain_id or has_social_cols:
@@ -199,6 +219,216 @@ def generate_decision_dashboard(
 
     # 15. Generic Fallback
     return _build_generic_dashboard(df, domain, profiles)
+
+
+# ==============================================================================
+# 0. GOVERNMENT PROCUREMENT DECISION DASHBOARD
+# ==============================================================================
+def _build_procurement_dashboard(
+    df: pd.DataFrame,
+    domain: DomainIdentitySchema,
+    profiles: List[ColumnProfile],
+) -> DecisionDashboardResponse:
+    row_count = len(df)
+
+    tender_id_col = _find_col(df, profiles, ("tender_id", "tender_no", "contract_id", "id", "tender"), ("identifier", "categorical", "numeric"))
+    val_col = _find_col(df, profiles, ("tender_value", "contract_value", "award_value", "amount", "budget", "value", "price"), "numeric")
+    dur_col = _find_col(df, profiles, ("tender_duration", "duration_days", "procurement_days", "lead_time_days", "duration"), "numeric")
+    bid_col = _find_col(df, profiles, ("bids_received", "tenderer_count", "bidders_count", "bids", "bidders", "suppliers"), "numeric")
+    buyer_col = _find_col(df, profiles, ("buyer", "contracting_authority", "procuring_entity", "agency", "department", "ministry"), "categorical")
+    method_col = _find_col(df, profiles, ("procurement_method", "method", "tender_type", "procedure", "type"), "categorical")
+    cat_col = _find_col(df, profiles, ("category", "procurement_category", "sector", "goods_services"), "categorical")
+
+    total_spend = _clean_num(df[val_col].sum()) if val_col else None
+    total_tenders = int(df[tender_id_col].nunique()) if tender_id_col else row_count
+    avg_tender_val = _clean_num(total_spend / total_tenders) if total_spend and total_tenders > 0 else None
+    avg_duration = _clean_num(df[dur_col].mean()) if dur_col else None
+    avg_bidders = _clean_num(df[bid_col].mean()) if bid_col else None
+
+    exec_metrics = [
+        MetricStatusSchema(
+            id="total_procurement_spend",
+            name="Total Procurement Value",
+            value=total_spend,
+            formatted_value=_format_currency(total_spend),
+            status="Calculated" if val_col else "Unavailable",
+            explanation=f"Sum of '{val_col}' across all awarded contracts." if val_col else "No contract value column detected.",
+            category="executive",
+            business_meaning="Aggregate public spending commitment across all recorded tenders.",
+            formula=f"SUM({val_col})" if val_col else None,
+        ),
+        MetricStatusSchema(
+            id="total_tenders",
+            name="Total Tenders Processed",
+            value=total_tenders,
+            formatted_value=str(total_tenders),
+            status="Calculated" if tender_id_col else "Estimated",
+            explanation=f"Distinct count of '{tender_id_col}'." if tender_id_col else "Estimated from row count.",
+            category="executive",
+            business_meaning="Volume of public procurement solicitations.",
+        ),
+        MetricStatusSchema(
+            id="avg_tender_value",
+            name="Average Tender Value",
+            value=avg_tender_val,
+            formatted_value=_format_currency(avg_tender_val),
+            status="Calculated" if avg_tender_val is not None else "Unavailable",
+            explanation="Mean monetary size per tender contract.",
+            category="executive",
+            business_meaning="Benchmark size for public contract awards.",
+        ),
+        MetricStatusSchema(
+            id="avg_tender_duration",
+            name="Average Tender Duration",
+            value=avg_duration,
+            formatted_value=f"{avg_duration:.1f} days" if avg_duration else "N/A",
+            status="Calculated" if dur_col else "Unavailable",
+            explanation=f"Arithmetic mean of '{dur_col}' in days." if dur_col else "No duration column detected.",
+            category="executive",
+            business_meaning="Average administrative cycle time from notice to contract award.",
+        ),
+        MetricStatusSchema(
+            id="avg_bidders",
+            name="Average Bidders per Tender",
+            value=avg_bidders,
+            formatted_value=f"{avg_bidders:.1f}" if avg_bidders else "N/A",
+            status="Calculated" if bid_col else "Unavailable",
+            explanation=f"Average number of bids received ('{bid_col}')." if bid_col else "No bidder count column found.",
+            category="executive",
+            business_meaning="Market competition indicator for public tenders.",
+        ),
+    ]
+
+    spend_charts: List[SectionChartSchema] = []
+    if buyer_col and val_col:
+        buyer_grp = df.groupby(buyer_col)[val_col].sum().sort_values(ascending=False).head(8)
+        spend_charts.append(
+            SectionChartSchema(
+                id="spend_by_buyer",
+                title="Procurement Spend by Buyer Agency",
+                business_question="Which public agencies/departments account for the largest procurement spend?",
+                chart_type="bar",
+                metric="Procurement Spend",
+                grouping="Buyer Agency",
+                explanation="Ranks procuring authorities by total committed contract spend.",
+                data=[{"x": str(idx), "y": _clean_num(val)} for idx, val in buyer_grp.items()],
+                x_label="Buyer Agency",
+                y_label="Total Spend ($)",
+            )
+        )
+
+    if method_col:
+        method_grp = df[method_col].value_counts().head(8)
+        spend_charts.append(
+            SectionChartSchema(
+                id="tenders_by_method",
+                title="Tenders by Procurement Method",
+                business_question="What is the distribution of tenders across procurement methods?",
+                chart_type="bar",
+                metric="Tender Count",
+                grouping="Procurement Method",
+                explanation="Compares the frequency of open vs direct/restricted procurement procedures.",
+                data=[{"x": str(idx), "y": _clean_num(val)} for idx, val in method_grp.items()],
+                x_label="Procurement Method",
+                y_label="Tender Count",
+            )
+        )
+
+    cat_charts: List[SectionChartSchema] = []
+    if cat_col and dur_col:
+        dur_grp = df.groupby(cat_col)[dur_col].mean().sort_values(ascending=False).head(8)
+        cat_charts.append(
+            SectionChartSchema(
+                id="avg_duration_by_category",
+                title="Average Tender Duration by Category (Days)",
+                business_question="Which procurement categories experience the longest administrative lead times?",
+                chart_type="bar",
+                metric="Average Duration (Days)",
+                grouping="Category",
+                explanation="Compares average turnaround days by category. Plotted as a bar chart because durations represent continuous averages, not part-to-whole shares.",
+                data=[{"x": str(idx), "y": _clean_num(val)} for idx, val in dur_grp.items()],
+                x_label="Procurement Category",
+                y_label="Average Duration (Days)",
+            )
+        )
+
+    if cat_col and val_col:
+        cat_val_grp = df.groupby(cat_col)[val_col].sum().sort_values(ascending=False).head(8)
+        cat_charts.append(
+            SectionChartSchema(
+                id="spend_by_category",
+                title="Procurement Spend by Category",
+                business_question="Which procurement categories absorb the highest public expenditure?",
+                chart_type="bar",
+                metric="Total Spend",
+                grouping="Category",
+                explanation="Ranks categories by total contract value committed.",
+                data=[{"x": str(idx), "y": _clean_num(val)} for idx, val in cat_val_grp.items()],
+                x_label="Category",
+                y_label="Total Spend ($)",
+            )
+        )
+
+    return DecisionDashboardResponse(
+        dataset_id="",
+        domain_name="Government Procurement",
+        executive_summary=DashboardSectionSchema(
+            section_id="executive_summary",
+            title="Public Procurement Executive Summary",
+            description="Overview of total public procurement spend, solicitation volumes, administrative turnaround, and bidder competition.",
+            is_available=True,
+            metrics=exec_metrics,
+            highlights=[
+                f"Audited {total_tenders:,} public tenders across {len(df):,} contract records.",
+                f"Total procurement commitment: {_format_currency(total_spend)}." if total_spend else "Tender volumes captured.",
+                f"Average turnaround duration: {avg_duration:.1f} days." if avg_duration else "Turnaround tracking unavailable.",
+            ],
+        ),
+        sales_performance=DashboardSectionSchema(
+            section_id="sales_performance",
+            title="Procurement Spend & Agency Allocation",
+            description="Agency-level procurement spending and procedural distribution.",
+            is_available=len(spend_charts) > 0,
+            charts=spend_charts,
+        ),
+        profitability=DashboardSectionSchema(
+            section_id="profitability",
+            title="Bidding Competition & Pricing Analysis",
+            description="Market competition intensity, tenderer participation, and price efficiency.",
+            is_available=bid_col is not None,
+            unavailable_reason="No bidder count or competition column found." if not bid_col else None,
+            metrics=[exec_metrics[4]],
+        ),
+        product_analysis=DashboardSectionSchema(
+            section_id="product_analysis",
+            title="Category Procurement & Lead Times",
+            description="Category-level spend distribution and administrative duration benchmarks.",
+            is_available=len(cat_charts) > 0,
+            charts=cat_charts,
+        ),
+        operations_inventory=DashboardSectionSchema(
+            section_id="operations_inventory",
+            title="Procurement Operational Efficiency",
+            description="Cycle time efficiency and procedural compliance.",
+            is_available=dur_col is not None,
+            unavailable_reason="No duration columns found." if not dur_col else None,
+            metrics=[exec_metrics[3]],
+        ),
+        insights_recommendations=DashboardSectionSchema(
+            section_id="insights_recommendations",
+            title="Procurement Intelligence & Policy Recommendations",
+            description="Actionable guidance to enhance procurement competition and accelerate cycle times.",
+            is_available=True,
+            insights=[
+                {
+                    "what_happened": f"Processed {total_tenders:,} public procurement solicitations with {_format_currency(total_spend)} in total commitments." if total_spend else f"Processed {total_tenders:,} tenders.",
+                    "why_it_happened": "Spend concentration typically aligns with major infrastructure and healthcare categories.",
+                    "what_to_investigate": "Investigate categories where average tender duration exceeds 90 days or where average bidders fall below 2.0.",
+                    "limitations": "Does not reflect cancelled tenders, post-award contract amendments, or supplier delivery disputes.",
+                }
+            ],
+        ),
+    )
 
 
 # ==============================================================================

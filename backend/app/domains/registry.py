@@ -13,6 +13,7 @@ from app.domains.manufacturing_energy import DOMAINS as MANUFACTURING_DOMAINS
 from app.domains.media_entertainment import DOMAINS as MEDIA_DOMAINS
 from app.domains.people_hr import DOMAINS as PEOPLE_DOMAINS
 from app.domains.public_environment import DOMAINS as PUBLIC_DOMAINS
+from app.domains.procurement import DOMAINS as PROCUREMENT_DOMAINS
 from app.domains.sales_marketing import DOMAINS as SALES_DOMAINS
 from app.domains.technology import DOMAINS as TECHNOLOGY_DOMAINS
 
@@ -29,6 +30,7 @@ _ALL_BLUEPRINTS: List[DomainBlueprint] = (
     + MANUFACTURING_DOMAINS
     + MEDIA_DOMAINS
     + PUBLIC_DOMAINS
+    + PROCUREMENT_DOMAINS
 )
 
 _BLUEPRINT_BY_ID: Dict[str, DomainBlueprint] = {bp.id: bp for bp in _ALL_BLUEPRINTS}

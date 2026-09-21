@@ -25,7 +25,7 @@ _WORD_RE = re.compile(r"[a-z0-9]+")
 def _tokenize(text: str) -> Set[str]:
     """Tokenize a column name or string into clean lowercase words."""
     spaced = re.sub(r"(?<!^)(?=[A-Z])", " ", str(text))
-    spaced = spaced.replace("_", " ").replace("-", " ").replace(".", " ")
+    spaced = spaced.replace("_", " ").replace("-", " ").replace(".", " ").replace("/", " ")
     return set(_WORD_RE.findall(spaced.lower()))
 
 

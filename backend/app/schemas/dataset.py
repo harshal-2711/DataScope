@@ -3,6 +3,26 @@ from typing import Any, Dict, List, Literal, Optional, Union
 from pydantic import BaseModel, Field
 
 
+class ColumnInferenceSchema(BaseModel):
+    name: str
+    original_type: str
+    inferred_type: str
+    confidence: float
+    missing_count: int
+    missing_percentage: float
+    unique_count: int
+    sample_values: List[Any] = Field(default_factory=list)
+    warnings: List[str] = Field(default_factory=list)
+
+
+class FileDiagnosticsSchema(BaseModel):
+    encoding_used: str = "utf-8"
+    delimiter_used: str = ","
+    duplicate_columns_renamed: List[str] = Field(default_factory=list)
+    malformed_rows_skipped: int = 0
+    warnings: List[str] = Field(default_factory=list)
+
+
 class DatasetSummary(BaseModel):
     dataset_id: str = Field(
         description="Server-side id for this dataset. Pass to the "
@@ -14,6 +34,8 @@ class DatasetSummary(BaseModel):
     column_count: int
     columns: List[str]
     dtypes: Dict[str, str]
+    inferred_columns: List[ColumnInferenceSchema] = Field(default_factory=list)
+    diagnostics: Optional[FileDiagnosticsSchema] = None
     preview: List[Dict[str, Any]] = Field(
         description="First N rows of the dataset (N = settings.PREVIEW_ROW_COUNT)."
     )
@@ -54,11 +76,20 @@ class ChartSpecSchema(BaseModel):
     y_label: str
     data: List[Dict[str, Any]]
     # Raw (non-prettified) source column names, present for charts backed
-    # by a categorical dimension and/or numeric measure. Lets the frontend
-    # request a genuine drill-down for a clicked category without having
-    # to reverse-engineer the raw column name from a prettified label.
+    # by a categorical dimension and/or numeric measure.
     dimension_column: Optional[str] = None
     metric_column: Optional[str] = None
+    # Rich analytical hierarchy fields
+    analytical_question: Optional[str] = None
+    metric_definition: Optional[str] = None
+    unit: Optional[str] = None
+    aggregation: Optional[str] = None
+    grouping: Optional[str] = None
+    time_granularity: Optional[str] = None
+    dataset_grain: Optional[str] = None
+    data_coverage: Optional[str] = None
+    explanation: Optional[str] = None
+    limitations: Optional[str] = None
 
 
 class KpiSchema(BaseModel):

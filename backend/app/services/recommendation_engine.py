@@ -12,14 +12,18 @@ Design goals (Phase 3 requirements):
   - Output is capped and diversified (not 8 bar charts) so the result is a
     small, genuinely useful set rather than an exhaustive combinatorial
     dump of every column pairing.
-
-Every candidate chart is scored, then a diversity-aware selection picks
-the final set (round-robins across chart types rather than always taking
-the single highest-scoring type).
+  - Strictly enforce analytical chart validation rules:
+    * Categorical comparisons -> Bar chart
+    * Valid time trends -> Line chart
+    * Continuous numerical distributions -> Histogram
+    * Numerical relationships -> Scatter plot
+    * Part-to-whole -> Pie/Donut (only for additive sums with <= 6 categories)
+    * NEVER use pie charts for durations, averages, rates, or > 6 categories
 """
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Literal, Optional, Tuple
 
@@ -27,6 +31,11 @@ import numpy as np
 import pandas as pd
 
 from app.core.config import settings
+from app.services.column_formatter import (
+    format_business_chart_title,
+    format_chart_description,
+    format_column_label,
+)
 from app.services.column_profiler import ColumnProfile, profile_dataset
 from app.services.semantic_rules import (
     dimension_importance,
@@ -37,35 +46,22 @@ from app.services.semantic_rules import (
 ChartType = Literal["bar", "line", "pie", "histogram", "scatter"]
 
 _SUM_NAME_HINTS = (
-    "count", "quantity", "qty", "total", "sum", "amount", "revenue",
-    "sales", "units", "volume", "spend", "cost",
+    "total", "sum", "amount", "revenue", "sales", "units", "volume",
+    "spend", "cost", "budget", "appropriation", "expenditure", "disbursement",
 )
 
-# How many of the top-scored dimensions/metrics are even considered for
-# combination charts. This is what stops "Customer_Login_type" (or any
-# other low-signal column) from being charted just because it happens to
-# exist -- only the strongest few candidates by business relevance get
-# paired up at all.
+_MEAN_NAME_HINTS = (
+    "price", "rate", "rating", "score", "pct", "percent", "margin", "duration", "days", "hours",
+    "bidders", "tenderers", "age", "tenure", "gpa", "ctr", "cpc", "discount", "lead_time", "turnaround",
+)
+
 TOP_K_DIMENSIONS = 4
 TOP_K_METRICS = 4
 TOP_K_HIGH_CARDINALITY_DIMENSIONS = 2
-# How many distinct values a "Top N Products"-style breakdown sends back.
-# Deliberately generous (not just "however many fit on a dashboard card")
-# -- the dashboard CARD only ever renders a compact slice of this on
-# screen (see frontend ChartRenderer's card-vs-detail variant), while the
-# full-size detail modal shows more of it. Sending a rich set here is what
-# makes "see the complete data in the detail view" possible at all.
 TOP_N_HIGH_CARDINALITY_CATEGORIES = 50
-MIN_DIMENSION_SCORE_FOR_HIGH_CARDINALITY = 2.0  # e.g. "Product" qualifies, a random free-text column does not
+MIN_DIMENSION_SCORE_FOR_HIGH_CARDINALITY = 2.0
 SCATTER_MIN_CORRELATION = 0.3
 SCATTER_MIN_CORRELATION_BOTH_IMPORTANT = 0.15
-# An "Other" bucket that would outweigh the largest individual category
-# hides more than it reveals -- in that case we show every individual
-# category instead of folding into Other (see _fold_into_other below).
-# Not capped at a small number: a dashboard CARD showing 20+ bars would be
-# a real problem, but that's a display concern the frontend owns (it caps
-# how many of these it actually renders in a compact card); the backend's
-# job is just to not silently discard real data.
 MAX_CATEGORIES_HARD_CAP = 60
 
 
@@ -79,10 +75,6 @@ class ChartSpec:
     y_label: str
     data: List[Dict[str, Any]]
     score: float = field(repr=False, default=0.0)
-    # Raw (non-prettified) column names backing this chart, when it's a
-    # dimension/metric breakdown -- lets the frontend request a genuine,
-    # data-driven drill-down for a clicked category without guessing which
-    # original column produced a prettified label like "Sub Category".
     dimension_column: Optional[str] = None
     metric_column: Optional[str] = None
 
@@ -119,25 +111,19 @@ def _clean(value: Any) -> Any:
 
 
 def _pick_aggregation(column_name: str) -> str:
-    """Heuristic: does this numeric column read as a total (sum) or a
-    typical value (mean)? 'revenue'/'quantity' -> sum, 'rating'/'price' ->
-    mean. Defaults to mean, the safer choice for an unknown quantity."""
+    """Heuristic: does this numeric column read as a total (sum) or a typical value (mean)?"""
     lowered = column_name.lower()
-    return "sum" if any(hint in lowered for hint in _SUM_NAME_HINTS) else "mean"
+    if any(hint in lowered for hint in _MEAN_NAME_HINTS):
+        return "mean"
+    if any(hint in lowered for hint in _SUM_NAME_HINTS):
+        return "sum"
+    return "mean"
 
 
 def _fold_into_other(
     series: pd.Series, max_categories: int
 ) -> Tuple[pd.Series, bool]:
-    """Keep the top categories of an already-sorted (descending) series.
-
-    Returns (shown_series, was_folded). Folding the remainder into a single
-    "Other" bucket is only useful when that bucket is a minor, honestly-
-    labeled remainder -- if "Other" would outweigh the largest individual
-    category (or even come close), it hides more signal than it saves
-    space, so instead we just show more individual categories (up to a
-    hard cap) with no "Other" bucket at all.
-    """
+    """Keep the top categories of an already-sorted (descending) series."""
     if len(series) <= max_categories:
         return series, False
 
@@ -146,11 +132,8 @@ def _fold_into_other(
     largest_individual = float(kept.iloc[0])
 
     if other_total <= largest_individual:
-        # "Other" is a believable remainder, not a hidden majority.
         return pd.concat([kept, pd.Series({"Other": other_total})]), True
 
-    # "Other" would dominate or rival the top category -- prefer showing
-    # more real categories over one misleading catch-all bucket.
     expanded_limit = min(MAX_CATEGORIES_HARD_CAP, len(series))
     expanded = series.iloc[:expanded_limit]
     return expanded, False
@@ -164,23 +147,27 @@ def _category_counts_chart(
     counts.index = counts.index.map(str)
     shown, folded = _fold_into_other(counts, settings.MAX_CATEGORIES_PER_CHART)
     data = [{"x": str(idx), "y": _clean(val)} for idx, val in shown.items()]
-    pretty_col = prettify(col)
+    pretty_col = format_column_label(col)
+    
     coverage_note = ""
     if not folded and len(shown) < total_categories:
-        coverage_note = f" Showing the top {len(shown)} of {total_categories} values."
-    # Spread across values (not all-equal) makes a count breakdown more
-    # informative -> higher score. Business-relevant dimensions (Category,
-    # Product, ...) are weighted up; low-signal ones (login_type,
-    # session_id, ...) are weighted down rather than excluded outright.
+        coverage_note = f" (Showing top {len(shown)} of {total_categories} values)"
+
     spread = float(counts.std()) / (float(counts.mean()) + 1e-9) if len(counts) > 1 else 0.0
     score = (3.5 + min(spread, 2.0)) * dim_score
+    
+    is_tender = "tender" in col.lower() or "ocid" in col.lower()
+    title = format_business_chart_title(None, col, agg="count", chart_type="bar")
+    description = format_chart_description(None, col, agg="count", chart_type="bar", coverage_note=coverage_note)
+    y_axis_label = "Number of Tenders" if is_tender else "Count"
+
     return ChartSpec(
         id=chart_id,
         chart_type="bar",
-        title=f"{pretty_col} Breakdown",
-        description=f"Number of rows for each value of '{pretty_col}'.{coverage_note}",
+        title=title,
+        description=description,
         x_label=pretty_col,
-        y_label="Count",
+        y_label=y_axis_label,
         data=data,
         score=score,
         dimension_column=col,
@@ -189,18 +176,25 @@ def _category_counts_chart(
 
 def _category_proportion_pie(
     df: pd.DataFrame, col: str, chart_id: str, dim_score: float
-) -> ChartSpec:
+) -> Optional[ChartSpec]:
     counts = df[col].value_counts(dropna=True).sort_values(ascending=False)
+    if len(counts) > settings.PIE_CHART_MAX_CATEGORIES or len(counts) <= 1:
+        return None
+
     counts.index = counts.index.map(str)
     data = [{"x": str(idx), "y": _clean(val)} for idx, val in counts.items()]
-    pretty_col = prettify(col)
+    pretty_col = format_column_label(col)
+    
+    title = format_business_chart_title(None, col, agg="count", chart_type="pie")
+    description = format_chart_description(None, col, agg="count", chart_type="pie")
+
     return ChartSpec(
         id=chart_id,
         chart_type="pie",
-        title=f"Share by {pretty_col}",
-        description=f"Proportion of rows in each category of '{pretty_col}'.",
+        title=title,
+        description=description,
         x_label=pretty_col,
-        y_label="Count",
+        y_label="Share of Total",
         data=data,
         score=3.0 * dim_score,
         dimension_column=col,
@@ -210,39 +204,41 @@ def _category_proportion_pie(
 def _category_measure_pie(
     df: pd.DataFrame, cat_col: str, num_col: str, chart_id: str, dim_score: float, met_score: float
 ) -> Optional[ChartSpec]:
-    """A metric-weighted donut -- e.g. 'Sales by Category' showing each
-    category's SHARE OF TOTAL SALES, not just its row count. This is the
-    part-to-whole view (what fraction of revenue does each category own)
-    that a plain count-based pie can't answer, and is what makes a
-    category pie genuinely useful on a dashboard rather than decorative.
+    """A metric-weighted donut for additive part-to-whole measures (e.g. Spend by Category).
+    
+    STRICT VALIDATION: Never use pie charts for durations, averages, rates, ratios, percentages,
+    or categories > 6!
     """
     agg = _pick_aggregation(num_col)
-    grouped = df.groupby(cat_col, dropna=True)[num_col].agg(agg)
-    grouped = grouped.dropna().sort_values(ascending=False)
-    if grouped.empty or grouped.nunique() <= 1 or (grouped < 0).any():
-        # Negative values (e.g. a net-loss category) can't be shown as a
-        # meaningful pie slice -- fall back to no pie for this pairing.
+    if agg != "sum":
         return None
+
+    lowered_metric = num_col.lower()
+    if any(k in lowered_metric for k in ("duration", "days", "time", "hours", "rate", "ratio", "pct", "percent", "gpa", "score", "price", "bidders", "tenderers")):
+        return None
+
+    grouped = df.groupby(cat_col, dropna=True)[num_col].agg("sum")
+    grouped = grouped.dropna().sort_values(ascending=False)
+    if grouped.empty or grouped.nunique() <= 1 or (grouped < 0).any() or len(grouped) > settings.PIE_CHART_MAX_CATEGORIES:
+        return None
+
     grouped.index = grouped.index.map(str)
-    pretty_metric = prettify(num_col)
-    pretty_dim = prettify(cat_col)
-    agg_label = "Total" if agg == "sum" else "Average"
+    pretty_metric = format_column_label(num_col)
+    pretty_dim = format_column_label(cat_col)
     data = [{"x": str(idx), "y": _clean(val)} for idx, val in grouped.items()]
     cv = float(grouped.std()) / (abs(float(grouped.mean())) + 1e-9)
-    # Scored above the plain count-pie (which uses a 3.0 base) since a
-    # value-weighted share of a real business metric is more actionable
-    # than a share of raw row counts.
     score = (5.0 + min(cv, 3.0)) * dim_score * met_score
+
+    title = format_business_chart_title(num_col, cat_col, agg="sum", chart_type="pie")
+    description = format_chart_description(num_col, cat_col, agg="sum", chart_type="pie")
+
     return ChartSpec(
         id=chart_id,
         chart_type="pie",
-        title=f"{pretty_metric} by {pretty_dim}",
-        description=(
-            f"Share of {agg_label.lower()} '{pretty_metric}' contributed by each "
-            f"'{pretty_dim}', highlighting which values drive the most impact."
-        ),
+        title=title,
+        description=description,
         x_label=pretty_dim,
-        y_label=f"{agg_label} {pretty_metric}",
+        y_label=f"Total {pretty_metric}",
         data=data,
         score=score,
         dimension_column=cat_col,
@@ -265,42 +261,46 @@ def _categorical_measure_bar(
     grouped = grouped.dropna().sort_values(ascending=False)
     if grouped.empty or grouped.nunique() <= 1:
         return None
+
     total_categories = len(grouped)
     grouped.index = grouped.index.map(str)
     limit = settings.MAX_CATEGORIES_PER_CHART if not top_n_only else TOP_N_HIGH_CARDINALITY_CATEGORIES
     coverage_note = ""
+    
     if top_n_only:
         shown = grouped.iloc[:limit]
         folded = False
         if len(shown) < total_categories:
-            coverage_note = f" Showing the top {len(shown)} of {total_categories} values."
+            coverage_note = f" (Showing top {len(shown)} of {total_categories} values)"
     elif agg == "sum":
         shown, folded = _fold_into_other(grouped, limit)
         if not folded and len(shown) < total_categories:
-            coverage_note = f" Showing the top {len(shown)} of {total_categories} values."
+            coverage_note = f" (Showing top {len(shown)} of {total_categories} values)"
     else:
         shown = grouped.iloc[:limit]
         if len(shown) < total_categories:
-            coverage_note = f" Showing the top {len(shown)} of {total_categories} values."
+            coverage_note = f" (Showing top {len(shown)} of {total_categories} values)"
+
     data = [{"x": str(idx), "y": _clean(val)} for idx, val in shown.items()]
-    agg_label = "Total" if agg == "sum" else "Average"
-    pretty_metric = prettify(num_col)
-    pretty_dim = prettify(cat_col)
+    pretty_metric = format_column_label(num_col)
+    pretty_dim = format_column_label(cat_col)
     cv = float(grouped.std()) / (abs(float(grouped.mean())) + 1e-9)
-    # Business relevance (both the metric and the dimension being
-    # recognized as meaningful) dominates the score -- a statistically
-    # "spread out" but low-relevance pairing (e.g. Discount by
-    # Customer_Login_type) should rank below a meaningful one even with a
-    # smaller coefficient of variation.
     score = (4.0 + min(cv, 3.0)) * dim_score * met_score
-    title_suffix = f" (Top {len(shown)})" if top_n_only else ""
+
+    title = format_business_chart_title(num_col, cat_col, agg=agg, chart_type="bar")
+    if top_n_only:
+        title = f"{title} (Top {len(shown)})"
+    description = format_chart_description(num_col, cat_col, agg=agg, chart_type="bar", coverage_note=coverage_note)
+    
+    y_axis_label = f"Average {pretty_metric}" if agg == "mean" else f"Total {pretty_metric}"
+
     return ChartSpec(
         id=chart_id,
         chart_type="bar",
-        title=f"{agg_label} {pretty_metric} by {pretty_dim}{title_suffix}",
-        description=f"{agg_label} of '{pretty_metric}' grouped by '{pretty_dim}'.{coverage_note}",
+        title=title,
+        description=description,
         x_label=pretty_dim,
-        y_label=f"{agg_label} {pretty_metric}",
+        y_label=y_axis_label,
         data=data,
         score=score,
         dimension_column=cat_col,
@@ -314,15 +314,13 @@ def _histogram(
     values = df[col].dropna().astype(float)
     if values.nunique() <= 1:
         return None
+
     bins = min(settings.HISTOGRAM_BIN_COUNT, max(5, values.nunique()))
     counts, edges = np.histogram(values, bins=bins)
     total = int(counts.sum())
     data = []
     for i in range(len(counts)):
         lo, hi = float(edges[i]), float(edges[i + 1])
-        # Explicit, human-readable bin boundaries (never scientific
-        # notation) -- rounded to a sensible precision for the value range
-        # rather than the raw float repr.
         decimals = 0 if (hi - edges[0]) >= 10 else 2
         label = f"{lo:,.{decimals}f}\u2013{hi:,.{decimals}f}"
         pct = round(100 * int(counts[i]) / total, 1) if total else 0.0
@@ -330,37 +328,18 @@ def _histogram(
             {"x": label, "y": int(counts[i]), "range_low": round(lo, 4),
              "range_high": round(hi, 4), "percent": pct}
         )
-    pretty_col = prettify(col)
-    lowered = col.lower()
-    # A business-readable title/description tied to what the metric
-    # actually represents, rather than a generic "X Distribution" label
-    # that requires the reader to already know what a histogram is.
-    if any(h in lowered for h in ("sales", "revenue", "amount", "price", "value", "total")):
-        title = f"{pretty_col} Distribution"
-        x_axis_label = f"{pretty_col} Range"
-        subject = "transaction"
-    elif any(h in lowered for h in ("quantity", "qty", "units")):
-        title = f"{pretty_col} Distribution"
-        x_axis_label = f"{pretty_col} Range"
-        subject = "order"
-    else:
-        title = f"{pretty_col} Distribution"
-        x_axis_label = f"{pretty_col} Range"
-        subject = "row"
-    description = (
-        f"Shows how frequently {subject}s fall within different '{pretty_col}' "
-        f"ranges, helping identify typical values, concentration, and unusually "
-        f"high or low outliers."
-    )
-    # Skewness (very unequal bins) is more visually interesting than a flat
-    # uniform spread, but any real spread beats a near-constant column.
+
+    pretty_col = format_column_label(col)
+    title = f"{pretty_col} Distribution"
+    description = format_chart_description(col, None, chart_type="histogram")
     score = (3.5 + min(float(np.std(counts)) / (float(np.mean(counts)) + 1e-9), 2.0)) * met_score
+
     return ChartSpec(
         id=chart_id,
         chart_type="histogram",
         title=title,
         description=description,
-        x_label=x_axis_label,
+        x_label=f"{pretty_col} Range",
         y_label="Number of Records",
         data=data,
         score=score,
@@ -379,11 +358,11 @@ def _timeseries_line(
 
     span_days = (working[date_col].max() - working[date_col].min()).days
     if span_days > 730:
-        freq, label = "MS", "month"
+        freq = "MS"
     elif span_days > 90:
-        freq, label = "W", "week"
+        freq = "W"
     else:
-        freq, label = "D", "day"
+        freq = "D"
 
     agg = _pick_aggregation(num_col)
     grouped = (
@@ -398,20 +377,22 @@ def _timeseries_line(
     data = [
         {"x": idx.date().isoformat(), "y": _clean(val)} for idx, val in grouped.items()
     ]
-    agg_label = "Total" if agg == "sum" else "Average"
-    pretty_metric = prettify(num_col)
+    pretty_metric = format_column_label(num_col)
+    pretty_date = format_column_label(date_col)
     cv = float(grouped.std()) / (abs(float(grouped.mean())) + 1e-9)
-    # Time trends are generally high-value, and doubly so for a recognized
-    # business metric (Sales/Profit/Quantity over time beats an obscure
-    # numeric column over time).
     score = (5.0 + min(cv, 3.0)) * met_score
+
+    title = format_business_chart_title(num_col, date_col, agg=agg, chart_type="line")
+    description = format_chart_description(num_col, date_col, agg=agg, chart_type="line")
+    y_axis_label = f"Average {pretty_metric}" if agg == "mean" else f"Total {pretty_metric}"
+
     return ChartSpec(
         id=chart_id,
         chart_type="line",
-        title=f"{pretty_metric} Over Time",
-        description=f"{agg_label} of '{pretty_metric}' by {prettify(date_col)}, bucketed by {label}.",
-        x_label=prettify(date_col),
-        y_label=f"{agg_label} {pretty_metric}",
+        title=title,
+        description=description,
+        x_label=pretty_date,
+        y_label=y_axis_label,
         data=data,
         score=score,
         metric_column=num_col,
@@ -435,73 +416,43 @@ def _scatter(
     if pd.isna(corr):
         return None
 
-    # A scatter plot is only analytically meaningful when either (a) both
-    # columns are recognized, important business metrics -- "Sales vs
-    # Profit" earns its place even at a modest correlation -- or (b) the
-    # correlation itself is strong enough to be interesting regardless of
-    # what the columns are named ("Profit vs Shipping_Cost" needs to prove
-    # itself statistically since neither is a clear analytical pairing by
-    # name alone).
     both_important = met_score_x >= 2.0 and met_score_y >= 2.0
     min_corr = SCATTER_MIN_CORRELATION_BOTH_IMPORTANT if both_important else SCATTER_MIN_CORRELATION
     if abs(float(corr)) < min_corr:
         return None
 
     sample = pair if len(pair) <= settings.SCATTER_MAX_POINTS else pair.sample(
-        settings.SCATTER_MAX_POINTS, random_state=0
+        settings.SCATTER_MAX_POINTS, random_state=42
     )
-    data = []
-    for idx, row in sample.iterrows():
-        point = {"x": _clean(row[col_x]), "y": _clean(row[col_y])}
-        point["id"] = str(row[id_col]) if id_col else f"Row {idx}"
-        data.append(point)
 
-    pretty_x, pretty_y = prettify(col_x), prettify(col_y)
-    score = (3.0 + min(abs(float(corr)) * 6, 6.0)) * ((met_score_x + met_score_y) / 2)
-    strength = (
-        "strong" if abs(corr) >= 0.6 else "moderate" if abs(corr) >= 0.3 else "weak"
-    )
-    direction_word = "Positive" if corr > 0 else "Negative"
-    relationship_label = (
-        "No Clear Relationship" if abs(corr) < 0.15
-        else f"{strength.capitalize()} {direction_word} Relationship"
-    )
-    if abs(corr) < 0.15:
-        interpretation = f"'{pretty_x}' and '{pretty_y}' show little to no linear relationship in this data."
-    else:
-        direction = "higher" if corr > 0 else "lower"
-        interpretation = (
-            f"Higher {pretty_x.lower()} generally corresponds to {direction} "
-            f"{pretty_y.lower()} in this data (correlation, not causation)."
-        )
+    data = []
+    for _, row in sample.iterrows():
+        pt: Dict[str, Any] = {"x": _clean(row[col_x]), "y": _clean(row[col_y])}
+        if id_col and id_col in row:
+            pt["id"] = str(row[id_col])
+        data.append(pt)
+
+    pretty_x = format_column_label(col_x)
+    pretty_y = format_column_label(col_y)
+    score = (4.0 + min(abs(float(corr)) * 3.0, 3.0)) * (met_score_x + met_score_y) / 2.0
+
     return ChartSpec(
         id=chart_id,
         chart_type="scatter",
         title=f"{pretty_x} vs {pretty_y}",
-        description=(
-            f"Shows the relationship between '{pretty_x}' and '{pretty_y}' across "
-            f"all rows. Correlation: {corr:.2f} ({relationship_label}). {interpretation}"
-        ),
+        description=format_chart_description(col_y, col_x, chart_type="scatter"),
         x_label=pretty_x,
         y_label=pretty_y,
         data=data,
         score=score,
+        dimension_column=col_x,
+        metric_column=col_y,
     )
 
 
-def _select_diverse(candidates: List[ChartSpec], max_charts: int) -> List[ChartSpec]:
-    """Greedy, globally score-ranked selection with a per-type cap.
-
-    A pure "take the top N by score" would often be dominated by one chart
-    type (bar breakdowns tend to outnumber everything else). A pure
-    round-robin (1 pick per type per round) goes too far the other way and
-    can crowd out a highly-relevant chart (e.g. "Sales by Category") in
-    favor of a much weaker one just because its type's turn came up. This
-    strikes a middle ground: process candidates in score order and take
-    each one unless its type has already hit its cap, so strong candidates
-    of the dominant type still fill most of the slots, while weaker types
-    are still guaranteed a little representation for visual diversity.
-    """
+def _select_diverse(
+    candidates: List[ChartSpec], max_charts: int
+) -> List[ChartSpec]:
     per_type_cap = {
         "bar": 4,
         "line": 2,
@@ -525,10 +476,6 @@ def _select_diverse(candidates: List[ChartSpec], max_charts: int) -> List[ChartS
 
 @dataclass
 class ColumnRanking:
-    """Business-relevance ranking of a dataset's columns, shared by the
-    overview recommendation engine and the drill-down endpoint so both
-    agree on what "the important metrics/dimensions" are."""
-
     profiles: List[ColumnProfile]
     top_metrics: List[str]
     top_dimensions: List[str]
@@ -586,19 +533,12 @@ def generate_recommendations(df: pd.DataFrame) -> List[ChartSpec]:
         counter += 1
         return f"chart_{counter}"
 
-    # 1) Category counts -- generated for the top-ranked groupable columns,
-    #    independently of whether a numeric measure exists, so a
-    #    categorical-only dataset still gets useful charts.
-    #    Pie/donut: prefer a metric-weighted "share of Sales by Category"
-    #    donut over a plain row-count pie when a real business metric
-    #    exists -- that's the analytically useful part-to-whole view. Falls
-    #    back to the count-based pie only when there's no numeric measure
-    #    to weight by (e.g. a categorical-only dataset).
+    # 1) Category counts
     for col in top_dimensions:
         dim_score = dimension_importance(col)
         candidates.append(_category_counts_chart(df, col, next_id(), dim_score))
         distinct = df[col].nunique(dropna=True)
-        if distinct <= settings.PIE_CHART_MAX_CATEGORIES:
+        if distinct <= settings.PIE_CHART_MAX_CATEGORIES and dim_score >= 2.0:
             pie_spec = None
             if top_metrics:
                 pie_spec = _category_measure_pie(
@@ -607,11 +547,10 @@ def generate_recommendations(df: pd.DataFrame) -> List[ChartSpec]:
                 )
             if pie_spec is None:
                 pie_spec = _category_proportion_pie(df, col, next_id(), dim_score)
-            candidates.append(pie_spec)
+            if pie_spec is not None:
+                candidates.append(pie_spec)
 
-    # 2) Categorical x numeric measure breakdowns, restricted to the
-    #    top-ranked dimensions and metrics so the result is "Sales by
-    #    Category" / "Profit by Category", not every possible pairing.
+    # 2) Categorical x numeric measure breakdowns
     for cat_col in top_dimensions:
         dim_score = dimension_importance(cat_col)
         for num_col in top_metrics:
@@ -622,11 +561,7 @@ def generate_recommendations(df: pd.DataFrame) -> List[ChartSpec]:
             if spec is not None:
                 candidates.append(spec)
 
-    # 2b) "Top N Product"-style breakdowns for important-but-high-cardinality
-    #     dimensions (Product, SKU...) paired with the top metrics only.
-    #     See _fold_into_other()/_categorical_measure_bar(): these never
-    #     fold into a dominating "Other" bucket, so the real top values
-    #     stay visible and drillable rather than hidden behind an average.
+    # 2b) "Top N"-style breakdowns for high-cardinality dimensions
     for cat_col in important_hc_dims:
         dim_score = dimension_importance(cat_col)
         for num_col in top_metrics[:2]:
@@ -637,13 +572,13 @@ def generate_recommendations(df: pd.DataFrame) -> List[ChartSpec]:
             if spec is not None:
                 candidates.append(spec)
 
-    # 3) Numeric distributions for the top-ranked metrics only.
+    # 3) Numeric distributions
     for col in top_metrics:
         spec = _histogram(df, col, next_id(), metric_importance(col))
         if spec is not None:
             candidates.append(spec)
 
-    # 4) Time series: date column x top-ranked numeric measures.
+    # 4) Time series
     for date_col in datetime_cols[:2]:
         pairs_added = 0
         for num_col in top_metrics:
@@ -656,12 +591,7 @@ def generate_recommendations(df: pd.DataFrame) -> List[ChartSpec]:
                 candidates.append(spec)
                 pairs_added += 1
 
-    # 5) Scatter plots for the most correlated numeric pairs among the
-    #    top-ranked metrics -- see _scatter() for the relevance gate that
-    #    keeps "Sales vs Profit" while filtering out weakly-related pairs
-    #    like "Profit vs Shipping_Cost" unless the correlation earns it.
-    #    Points are labeled with the top dimension (e.g. Product) when one
-    #    exists, so tooltips identify an entity rather than an anonymous dot.
+    # 5) Scatter plots
     id_col = top_dimensions[0] if top_dimensions else None
     if len(top_metrics) >= 2:
         corr_pairs: List[Tuple[str, str, float]] = []
@@ -692,11 +622,6 @@ _ORDER_NAME_HINTS = ("order", "transaction", "invoice", "booking")
 
 
 def compute_kpis(df: pd.DataFrame, ranking: Optional[ColumnRanking] = None) -> List[Dict[str, Any]]:
-    """Derive a small set of headline KPIs from the dataset's own top
-    metrics -- never invented, never hard-coded to e-commerce field names.
-    Each KPI carries a `kind` the frontend uses to pick an icon/accent
-    color (falls back to a generic style for anything it doesn't recognize).
-    """
     if ranking is None:
         ranking = rank_columns(df)
 
@@ -709,7 +634,7 @@ def compute_kpis(df: pd.DataFrame, ranking: Optional[ColumnRanking] = None) -> L
         if series.empty:
             continue
         value = float(series.sum()) if agg == "sum" else float(series.mean())
-        label = f"Total {prettify(col)}" if agg == "sum" else f"Average {prettify(col)}"
+        label = f"Total {format_column_label(col)}" if agg == "sum" else f"Average {format_column_label(col)}"
         kpis.append({
             "label": label,
             "value": round(value, 2),
@@ -717,27 +642,24 @@ def compute_kpis(df: pd.DataFrame, ranking: Optional[ColumnRanking] = None) -> L
             "format": "number",
         })
 
-    # A generic "how many records/orders" KPI -- labeled "Total Orders"
-    # only if the dataset actually looks order/transaction-shaped by name,
-    # otherwise the honest generic label "Total Rows".
     looks_order_shaped = any(
         any(hint in c.lower() for hint in _ORDER_NAME_HINTS) for c in df.columns
     )
+    is_tender_shaped = any("tender" in c.lower() or "ocid" in c.lower() for c in df.columns)
+    
+    count_label = "Total Tenders" if is_tender_shaped else ("Total Orders" if looks_order_shaped else "Total Records")
     kpis.append({
-        "label": "Total Orders" if looks_order_shaped else "Total Rows",
+        "label": count_label,
         "value": row_count,
         "kind": "orders",
         "format": "count",
     })
 
-    # Average order value: total of the top "sum" metric / row count, only
-    # when that metric is a real total (sum aggregation) -- averaging an
-    # already-averaged metric per row would be meaningless.
     for col in ranking.top_metrics:
         if _pick_aggregation(col) == "sum" and row_count > 0:
             total = float(df[col].dropna().sum())
             kpis.append({
-                "label": f"Average {prettify(col)} per Row",
+                "label": f"Average {format_column_label(col)} per Row",
                 "value": round(total / row_count, 2),
                 "kind": "average",
                 "format": "number",
@@ -751,11 +673,11 @@ def _kpi_kind(column_name: str) -> str:
     lowered = column_name.lower()
     if any(h in lowered for h in ("profit", "margin", "income", "earning")):
         return "profit"
-    if any(h in lowered for h in ("sales", "revenue")):
+    if any(h in lowered for h in ("sales", "revenue", "spend", "cost", "value", "amount")):
         return "sales"
-    if any(h in lowered for h in ("quantity", "qty", "units")):
+    if any(h in lowered for h in ("quantity", "qty", "units", "bidders", "tenderers")):
         return "quantity"
-    if any(h in lowered for h in ("discount",)):
+    if any(h in lowered for h in ("discount", "rate", "pct")):
         return "discount"
     return "generic"
 
@@ -767,16 +689,6 @@ def generate_drilldown(
     filters: List[Tuple[str, str]],
     ranking: Optional[ColumnRanking] = None,
 ) -> Optional[Dict[str, Any]]:
-    """Data-driven drill-down for one or more stacked (dimension, value)
-    filters -- e.g. [('Category', 'Clothing'), ('Product', 'T-Shirts')] for
-    a second-level drill into Product within an already-selected Category.
-
-    Generic: works for any categorical column(s)/value(s) that exist in the
-    dataset, in any order, never hard-coded to a specific dimension name.
-    The *last* filter in the list is treated as "the current level" for the
-    response's dimension/value/label fields; earlier filters just narrow
-    the base data before that level is computed.
-    """
     if not filters:
         return None
     if ranking is None:
@@ -804,23 +716,9 @@ def generate_drilldown(
             metric_importance(primary_metric),
         )
         if spec is not None:
-            spec.title = f"{current_value} \u2014 {prettify(primary_metric)} Over Time"
+            spec.title = f"{current_value} \u2014 {format_column_label(primary_metric)} Over Time"
             trend_chart = spec.to_dict()
 
-    # A meaningful "what's driving this?" breakdown must use a dimension
-    # not already pinned by one of the active filters -- otherwise every
-    # value in it would trivially be 100% of the subset. It also needs to
-    # actually explain the CONTENTS of the current filter, not just
-    # restate it in a different shape: given Category="Fashion", "which
-    # Products make up Fashion" is a far more useful child analysis than
-    # "how does Fashion split by Gender" -- both are technically valid
-    # dimensions, but a low-cardinality demographic split barely qualifies
-    # as "drilling into the contents" the way a granular Product/Item/SKU
-    # breakdown does. Score candidates by BOTH business relevance (from
-    # semantic_rules) AND how much genuine detail they reveal within this
-    # specific filtered subset (their remaining cardinality here, not
-    # dataset-wide) -- so the more granular, more revealing dimension wins
-    # even when a broader one shares the same semantic importance tier.
     secondary_chart = None
     secondary_dimension_column = None
     candidate_dims: List[str] = []
@@ -831,7 +729,7 @@ def generate_drilldown(
     def _child_dimension_score(dim: str) -> float:
         distinct_here = subset[dim].nunique(dropna=True)
         if distinct_here <= 1:
-            return -1.0  # dead end: filtering further wouldn't reveal anything
+            return -1.0
         granularity_bonus = 1.0 + min(float(np.log1p(distinct_here)), 3.0)
         return dimension_importance(dim) * granularity_bonus
 
@@ -848,27 +746,23 @@ def generate_drilldown(
             top_n_only=is_high_cardinality,
         )
         if spec is not None:
-            spec.title = f"{prettify(second_dim)} Breakdown Within {current_value}"
+            pretty_dim = format_column_label(second_dim)
+            pretty_met = format_column_label(primary_metric)
+            spec.title = f"{pretty_dim} Breakdown Within {current_value}"
             spec.description = (
-                f"Which values of '{prettify(second_dim)}' contribute most to "
-                f"'{prettify(primary_metric)}' within {current_dim} = \"{current_value}\", "
-                f"showing what's actually driving this selection's numbers."
+                f"Compares '{pretty_met}' across '{pretty_dim}' within {format_column_label(current_dim)} = \"{current_value}\"."
             )
             secondary_chart = spec.to_dict()
             secondary_dimension_column = second_dim
 
     return {
         "dimension": current_dim,
-        "dimension_label": prettify(current_dim),
+        "dimension_label": format_column_label(current_dim),
         "value": str(current_value),
         "row_count": int(len(subset)),
         "kpis": kpis,
         "trend_chart": trend_chart,
         "secondary_chart": secondary_chart,
-        # Lets the frontend know whether the secondary chart's bars are
-        # themselves drillable into a further (third) level -- omitted
-        # gracefully (None) when no further meaningful dimension exists,
-        # per "don't invent a level that isn't there".
         "secondary_dimension": secondary_dimension_column,
         "applied_filters": [{"dimension": d, "value": v} for d, v in filters],
     }

@@ -8,6 +8,7 @@ import { FileDetails } from "@/components/dataset/FileDetails"
 import { UploadError } from "@/components/dataset/UploadError"
 import { DatasetSummaryCards } from "@/components/dataset/DatasetSummaryCards"
 import { DatasetPreviewTable } from "@/components/dataset/DatasetPreviewTable"
+import { DataQualityCard } from "@/components/intelligence/DataQualityCard"
 import { useDatasetUpload } from "@/hooks/useDatasetUpload"
 import { useActiveDataset } from "@/context/DatasetContext"
 
@@ -79,6 +80,7 @@ export default function Dataset() {
             </div>
           </div>
           <DatasetSummaryCards summary={state.summary} />
+          <DataQualityCard datasetId={state.summary.dataset_id} />
           <DatasetPreviewTable summary={state.summary} />
         </div>
       )}

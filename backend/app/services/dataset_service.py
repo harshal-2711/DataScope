@@ -50,8 +50,14 @@ from app.services.sports_cricket_service import (
     detect_cricket_dataset_type,
 )
 from app.services.business_analytics_engine import generate_decision_dashboard
-from app.services.trend_engine import compute_trends
+from app.services.data_quality_engine import compute_data_quality_report
+from app.services.file_parser import FileDiagnostics, parse_tabular_file
+from app.services.forecast_engine import compute_forecast
+from app.services.grain_engine import detect_dataset_grain
+from app.services.trend_engine import compute_trends, compute_trends_intelligence
+from app.services.type_inference import infer_dataset_types
 from app.services.universal_stats import compute_universal_statistics
+
 
 
 def get_file_type(filename: str) -> str:
@@ -113,52 +119,42 @@ def validate_size(contents: bytes) -> None:
 
 
 def read_dataframe(contents: bytes, file_type: str) -> pd.DataFrame:
-    """Parse the uploaded bytes into a DataFrame. Original bytes are untouched."""
-    buffer = io.BytesIO(contents)
-
-    try:
-        if file_type == "csv":
-            df = pd.read_csv(buffer)
-        elif file_type == "xlsx":
-            df = pd.read_excel(buffer, engine="openpyxl")
-        elif file_type == "xls":
-            df = pd.read_excel(buffer, engine="xlrd")
-        else:  # pragma: no cover - guarded by get_file_type earlier
-            raise UnsupportedFileTypeError(f"Unsupported file type: {file_type}")
-    except UnsupportedFileTypeError:
-        raise
-    except pd.errors.EmptyDataError as exc:
-        raise EmptyDatasetError("The file contains no data.") from exc
-    except Exception as exc:
-        raise UnreadableFileError(
-            "The file could not be read. It may be corrupted, malformed, "
-            f"or not a valid {file_type.upper()} file. "
-            f"(details: {type(exc).__name__})"
-        ) from exc
-
-    if df.shape[1] == 0:
-        raise EmptyDatasetError("The dataset contains no columns.")
-    if df.shape[0] == 0:
-        raise EmptyDatasetError("The dataset contains no rows.")
-
+    """Parse the uploaded bytes into a DataFrame using robust fallback parser."""
+    df, _ = parse_tabular_file(contents, "file", file_type)
     return df
 
 
 def build_summary(
-    df: pd.DataFrame, filename: str, file_type: str, dataset_id: str
+    df: pd.DataFrame,
+    filename: str,
+    file_type: str,
+    dataset_id: str,
+    diagnostics: Optional[FileDiagnostics] = None,
 ) -> Dict[str, Any]:
     """Build the metadata + preview payload returned to the frontend.
 
     Uses pandas' own JSON serialization (via to_json) to safely handle
     NaN -> null and numpy scalar types -> native Python types, rather
     than hand-rolling type coercion.
+    Computes semantic type inference for all columns.
     """
     dtypes = {str(col): str(df[col].dtype) for col in df.columns}
+    inferred = infer_dataset_types(df)
 
     preview_df = df.head(settings.PREVIEW_ROW_COUNT)
     preview: List[Dict[str, Any]] = json.loads(
         preview_df.to_json(orient="records", date_format="iso")
     )
+
+    diag_dict = None
+    if diagnostics:
+        diag_dict = {
+            "encoding_used": diagnostics.encoding_used,
+            "delimiter_used": diagnostics.delimiter_used,
+            "duplicate_columns_renamed": diagnostics.duplicate_columns_renamed,
+            "malformed_rows_skipped": diagnostics.malformed_rows_skipped,
+            "warnings": diagnostics.warnings,
+        }
 
     return {
         "dataset_id": dataset_id,
@@ -168,6 +164,8 @@ def build_summary(
         "column_count": int(df.shape[1]),
         "columns": [str(col) for col in df.columns],
         "dtypes": dtypes,
+        "inferred_columns": [c.to_dict() for c in inferred],
+        "diagnostics": diag_dict,
         "preview": preview,
     }
 
@@ -185,9 +183,9 @@ def process_upload(
     file_type = get_file_type(filename)
     validate_content_type(content_type, file_type)
     validate_size(contents)
-    df = read_dataframe(contents, file_type)
+    df, diagnostics = parse_tabular_file(contents, filename, file_type)
     dataset_id = dataset_store.save_dataset(filename, file_type, df)
-    return build_summary(df, filename, file_type, dataset_id)
+    return build_summary(df, filename, file_type, dataset_id, diagnostics)
 
 
 def get_recommendations(dataset_id: str) -> Dict[str, Any]:
@@ -266,6 +264,9 @@ def get_domain_intelligence(dataset_id: str) -> Dict[str, Any]:
     # 2. Detect Domain Identity
     domain = detect_domain(df, profiles)
 
+    # 2b. Detect Dataset Grain & Analytical Representation
+    dataset_grain = detect_dataset_grain(df)
+
     # 3. Detect Entities
     blueprint = get_blueprint_by_id(domain.domain_id) or get_fallback_blueprint()
     entities = detect_entities(df, profiles, blueprint)
@@ -277,7 +278,7 @@ def get_domain_intelligence(dataset_id: str) -> Dict[str, Any]:
     kpis = compute_domain_kpis(df, capabilities.kpis)
 
     # 6. Generate Domain Charts
-    charts = generate_domain_charts(df, capabilities.charts)
+    charts = generate_domain_charts(df, capabilities.charts, dataset_grain.grain_label)
 
     # 7. Compute Comparisons
     comparisons = compute_comparisons(df, capabilities.comparisons)
@@ -344,12 +345,16 @@ def get_domain_intelligence(dataset_id: str) -> Dict[str, Any]:
     decision_dashboard = generate_decision_dashboard(df, domain, profiles)
     decision_dashboard.dataset_id = dataset_id
 
+    # 14. Compute Full Data Quality Report
+    data_quality_rep = compute_data_quality_report(df, dataset_id, domain)
+
     def _to_dict(obj: Any) -> Dict[str, Any]:
         return obj.model_dump() if hasattr(obj, "model_dump") else obj.dict()
 
     return {
         "dataset_id": dataset_id,
         "domain": _to_dict(domain),
+        "dataset_grain": dataset_grain.to_dict(),
         "entities": [_to_dict(e) for e in entities],
         "kpis": [_to_dict(k) for k in kpis],
         "charts": [_to_dict(c) for c in charts],
@@ -361,6 +366,7 @@ def get_domain_intelligence(dataset_id: str) -> Dict[str, Any]:
         "validation_report": validation_report,
         "universal_statistics": universal_stats,
         "decision_dashboard": _to_dict(decision_dashboard),
+        "data_quality_report": _to_dict(data_quality_rep),
     }
 
 
@@ -384,3 +390,49 @@ def get_universal_statistics(dataset_id: str) -> Dict[str, Any]:
     """Return comprehensive universal descriptive statistics for a dataset."""
     entry = dataset_store.get_dataset_or_raise(dataset_id)
     return compute_universal_statistics(entry.df)
+
+
+def get_trends_intelligence(
+    dataset_id: str,
+    granularity: str = "auto",
+    metric: Optional[str] = None,
+    category_col: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Return comprehensive time-series trends intelligence with multi-granularity and period comparisons."""
+    entry = dataset_store.get_dataset_or_raise(dataset_id)
+    res = compute_trends_intelligence(
+        df=entry.df,
+        dataset_id=dataset_id,
+        granularity=granularity,
+        metric=metric,
+        category_col=category_col,
+    )
+    return res.model_dump() if hasattr(res, "model_dump") else res.dict()
+
+
+def get_forecast(
+    dataset_id: str,
+    horizon: int = 6,
+    metric: Optional[str] = None,
+    granularity: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Return statistical time-series forecast with confidence intervals and limitations."""
+    entry = dataset_store.get_dataset_or_raise(dataset_id)
+    res = compute_forecast(
+        df=entry.df,
+        dataset_id=dataset_id,
+        horizon=horizon,
+        metric=metric,
+        granularity=granularity,
+    )
+    return res.model_dump() if hasattr(res, "model_dump") else res.dict()
+
+
+def get_data_quality_report(dataset_id: str) -> Dict[str, Any]:
+    """Return comprehensive data quality and hygiene inspection report."""
+    entry = dataset_store.get_dataset_or_raise(dataset_id)
+    profiles = profile_dataset(entry.df)
+    domain = detect_domain(entry.df, profiles)
+    rep = compute_data_quality_report(entry.df, dataset_id, domain)
+    return rep.model_dump() if hasattr(rep, "model_dump") else rep.dict()
+

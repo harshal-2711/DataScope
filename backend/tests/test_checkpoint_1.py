@@ -21,6 +21,7 @@ from app.domains.logistics_travel import DOMAINS as LOGISTICS_DOMAINS
 from app.domains.manufacturing_energy import DOMAINS as MANUFACTURING_DOMAINS
 from app.domains.media_entertainment import DOMAINS as MEDIA_DOMAINS
 from app.domains.people_hr import DOMAINS as PEOPLE_DOMAINS
+from app.domains.procurement import DOMAINS as PROCUREMENT_DOMAINS
 from app.domains.public_environment import DOMAINS as PUBLIC_DOMAINS
 from app.domains.registry import (
     get_all_blueprints,
@@ -194,13 +195,14 @@ class TestCheckpoint1(unittest.TestCase):
             + len(MANUFACTURING_DOMAINS)
             + len(MEDIA_DOMAINS)
             + len(PUBLIC_DOMAINS)
+            + len(PROCUREMENT_DOMAINS)
         )
-        self.assertEqual(total, 75, "Total across all modules must equal 75")
+        self.assertEqual(total, 77, "Total across all modules must equal 77")
 
     def test_registry_contains_all_75_domains_without_duplicates(self):
-        """Verify that all 75 domains are registered with unique IDs and names."""
+        """Verify that all domains are registered with unique IDs and names."""
         blueprints = get_all_blueprints()
-        self.assertEqual(len(blueprints), 75)
+        self.assertEqual(len(blueprints), 77)
 
         # Ensure all IDs are unique
         ids = [bp.id for bp in blueprints]

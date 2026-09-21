@@ -4,6 +4,26 @@ export interface DatasetPreviewRow {
   [column: string]: string | number | boolean | null
 }
 
+export interface ColumnInference {
+  name: string
+  original_type: string
+  inferred_type: string
+  confidence: number
+  missing_count: number
+  missing_percentage: number
+  unique_count: number
+  sample_values: any[]
+  warnings: string[]
+}
+
+export interface FileDiagnostics {
+  encoding_used: string
+  delimiter_used: string
+  duplicate_columns_renamed: string[]
+  malformed_rows_skipped: number
+  warnings: string[]
+}
+
 export interface DatasetSummary {
   dataset_id: string
   filename: string
@@ -12,6 +32,8 @@ export interface DatasetSummary {
   column_count: number
   columns: string[]
   dtypes: Record<string, string>
+  inferred_columns?: ColumnInference[]
+  diagnostics?: FileDiagnostics | null
   preview: DatasetPreviewRow[]
 }
 
@@ -48,13 +70,9 @@ export type ChartType = "bar" | "line" | "pie" | "histogram" | "scatter"
 export interface ChartDataPoint {
   x: string | number | boolean | null
   y: string | number | boolean | null
-  // Present on histogram points: exact (never scientific-notation) bin
-  // boundaries and share-of-total, for full-precision tooltips.
   range_low?: number
   range_high?: number
   percent?: number
-  // Present on scatter points: identifies the underlying row/entity
-  // (a business dimension's value when one exists, else "Row N").
   id?: string
 }
 
@@ -66,11 +84,18 @@ export interface ChartSpec {
   x_label: string
   y_label: string
   data: ChartDataPoint[]
-  // Raw (non-prettified) source column names, present when this chart is
-  // backed by a categorical dimension and/or numeric measure. Used to
-  // request a genuine backend drill-down for a clicked category.
   dimension_column?: string | null
   metric_column?: string | null
+  analytical_question?: string | null
+  metric_definition?: string | null
+  unit?: string | null
+  aggregation?: string | null
+  grouping?: string | null
+  time_granularity?: string | null
+  dataset_grain?: string | null
+  data_coverage?: string | null
+  explanation?: string | null
+  limitations?: string | null
 }
 
 export interface Kpi {

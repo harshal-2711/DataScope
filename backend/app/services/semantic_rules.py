@@ -114,38 +114,9 @@ def is_time_named(column_name: str) -> bool:
     return _matches_any(tokens, _TIME_HINTS, lowered)
 
 
-# Small synonym map for turning a raw column name into a friendlier label.
-# Falls back to generic title-casing for anything not listed here.
-_LABEL_OVERRIDES = {
-    "qty": "Quantity",
-    "amt": "Amount",
-    "pct": "Percent",
-    "id": "ID",
-}
+from app.services.column_formatter import format_column_label
 
 
 def prettify(column_name: str) -> str:
-    """Turn a raw column name into a human-readable label:
-    'order_date' -> 'Order Date', 'shippingCost' -> 'Shipping Cost',
-    'CustomerID' -> 'Customer ID' (acronym-like runs are preserved)."""
-    # Split lower->upper boundaries ("shippingCost" -> "shipping Cost") and
-    # acronym->word boundaries ("HTTPServer" -> "HTTP Server"), but do NOT
-    # split inside a run of capitals ("ID" stays "ID", not "I D").
-    spaced = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", " ", column_name)
-    spaced = re.sub(r"(?<=[A-Z])(?=[A-Z][a-z])", " ", spaced)
-    spaced = spaced.replace("_", " ").replace("-", " ").strip()
-    words = [w for w in spaced.split(" ") if w]
-    if not words:
-        return column_name
-
-    pretty_words = []
-    for w in words:
-        lowered = w.lower()
-        if lowered in _LABEL_OVERRIDES:
-            pretty_words.append(_LABEL_OVERRIDES[lowered])
-        elif w.isupper() and len(w) > 1:
-            # Looks like an existing acronym (ID, URL, USA...) -- keep as-is.
-            pretty_words.append(w)
-        else:
-            pretty_words.append(w[:1].upper() + w[1:].lower())
-    return " ".join(pretty_words)
+    """Turn a raw column name into a clean, human-readable label."""
+    return format_column_label(column_name)

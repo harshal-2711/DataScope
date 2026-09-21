@@ -45,7 +45,7 @@ _WORD_RE = re.compile(r"[a-z0-9]+")
 
 def _tokenize(text: str) -> Set[str]:
     spaced = re.sub(r"(?<!^)(?=[A-Z])", " ", str(text))
-    spaced = spaced.replace("_", " ").replace("-", " ")
+    spaced = spaced.replace("_", " ").replace("-", " ").replace(".", " ").replace("/", " ")
     return set(_WORD_RE.findall(spaced.lower()))
 
 

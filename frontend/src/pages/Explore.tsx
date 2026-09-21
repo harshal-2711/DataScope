@@ -5,6 +5,7 @@ import { EmptyState } from "@/components/shared/EmptyState"
 import { Button } from "@/components/ui/button"
 import { RecommendationsGrid } from "@/components/charts/RecommendationsGrid"
 import { DomainHeader } from "@/components/intelligence/DomainHeader"
+import { DatasetGrainBadge } from "@/components/intelligence/DatasetGrainBadge"
 import { EntityBadges } from "@/components/intelligence/EntityBadges"
 import { ValidationBanner } from "@/components/intelligence/ValidationBanner"
 import { UniversalStatsViewer } from "@/components/intelligence/UniversalStatsViewer"
@@ -42,6 +43,9 @@ export default function Explore() {
             <div className="space-y-6">
               <ValidationBanner report={intelState.data.validation_report} />
               <DomainHeader domain={intelState.data.domain} />
+              {intelState.data.dataset_grain && (
+                <DatasetGrainBadge grain={intelState.data.dataset_grain} />
+              )}
               <EntityBadges entities={intelState.data.entities} />
               <DecisionDashboard dashboard={intelState.data.decision_dashboard} />
               <UniversalStatsViewer statistics={intelState.data.universal_statistics} />

@@ -1,8 +1,10 @@
+import { useState } from "react"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { ChartRenderer } from "@/components/charts/ChartRenderer"
 import { getColorSet, inferChartColorKind } from "@/lib/chartColors"
 import type { ChartSpec } from "@/types/dataset"
+import { Info, HelpCircle, ChevronDown, ChevronUp } from "lucide-react"
 
 const CHART_TYPE_LABEL: Record<ChartSpec["chart_type"], string> = {
   bar: "Bar",
@@ -20,13 +22,6 @@ const TIER_HEIGHT: Record<ChartCardTier, number> = {
   supporting: 220,
 }
 
-// Chart-type-specific adjustment layered on top of the tier height: a
-// donut doesn't need as much vertical room as a wide category ranking,
-// while a scatter benefits from a slightly taller, more square-ish area.
-// Horizontal product-style bar charts still grow modestly with category
-// count inside ChartRenderer, but only up to its own hard ceiling (see
-// the "card" variant there) -- this value is a floor/starting point, not
-// something that can compound into an unbounded card height anymore.
 function resolveHeight(tier: ChartCardTier, chartType: ChartSpec["chart_type"]): number {
   const base = TIER_HEIGHT[tier]
   switch (chartType) {
@@ -52,13 +47,18 @@ export function ChartCard({
 }: {
   chart: ChartSpec
   onClick?: () => void
-  /** Visual hierarchy tier -- determines chart height/title size. Assigned
-   * by the caller based on each chart's rank (score), which the backend
-   * already computes from business relevance, so this stays data-driven
-   * rather than hardcoded to specific chart titles. */
   tier?: ChartCardTier
 }) {
+  const [showMetadata, setShowMetadata] = useState(false)
   const colors = getColorSet(inferChartColorKind(`${chart.title} ${chart.y_label}`))
+
+  const hasAnalyticalDetails = Boolean(
+    chart.analytical_question ||
+    chart.metric_definition ||
+    chart.unit ||
+    chart.dataset_grain ||
+    chart.limitations
+  )
 
   return (
     <Card
@@ -83,19 +83,80 @@ export function ChartCard({
       }
     >
       <div className="absolute inset-x-0 top-0 h-1" style={{ background: colors.hex }} />
-      <CardHeader className="pt-5">
+      
+      <CardHeader className="pt-5 pb-2">
         <div className="flex items-start justify-between gap-3">
-          <CardTitle className={TIER_TITLE_CLASS[tier]}>{chart.title}</CardTitle>
-          <Badge variant="secondary" className="shrink-0">
+          <div>
+            <CardTitle className={TIER_TITLE_CLASS[tier]}>{chart.title}</CardTitle>
+            {chart.analytical_question && (
+              <p className="text-xs font-medium text-primary/90 mt-1 flex items-center gap-1.5">
+                <HelpCircle className="h-3 w-3 shrink-0" />
+                {chart.analytical_question}
+              </p>
+            )}
+          </div>
+          <Badge variant="secondary" className="shrink-0 font-normal text-xs">
             {CHART_TYPE_LABEL[chart.chart_type]}
           </Badge>
         </div>
-        <CardDescription className={tier === "supporting" ? "line-clamp-2" : undefined}>
+        <CardDescription className={tier === "supporting" ? "line-clamp-2 mt-1" : "mt-1"}>
           {chart.description}
         </CardDescription>
       </CardHeader>
-      <CardContent className="flex-1 pb-6">
+
+      <CardContent className="flex-1 pb-4 flex flex-col justify-between">
         <ChartRenderer chart={chart} height={resolveHeight(tier, chart.chart_type)} variant="card" />
+
+        {/* Analytical Hierarchy Footer */}
+        {hasAnalyticalDetails && (
+          <div className="mt-3 pt-2.5 border-t border-border/50 text-xs">
+            <div className="flex items-center justify-between text-[11px] text-muted-foreground">
+              <div className="flex flex-wrap gap-1.5 items-center">
+                {chart.unit && (
+                  <span className="px-1.5 py-0.5 rounded bg-muted/70 text-muted-foreground font-medium">
+                    Unit: {chart.unit}
+                  </span>
+                )}
+                {chart.aggregation && (
+                  <span className="px-1.5 py-0.5 rounded bg-muted/70 text-muted-foreground font-medium">
+                    Agg: {chart.aggregation}
+                  </span>
+                )}
+                {chart.dataset_grain && (
+                  <span className="px-1.5 py-0.5 rounded bg-indigo-500/10 text-indigo-700 dark:text-indigo-300 font-medium">
+                    {chart.dataset_grain}
+                  </span>
+                )}
+              </div>
+
+              {(chart.explanation || chart.limitations) && (
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    setShowMetadata(!showMetadata)
+                  }}
+                  className="inline-flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground transition-colors ml-auto"
+                >
+                  <Info className="h-3 w-3" />
+                  <span>{showMetadata ? "Less" : "Methodology"}</span>
+                  {showMetadata ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
+                </button>
+              )}
+            </div>
+
+            {showMetadata && (
+              <div className="mt-2 p-2 rounded-md bg-muted/40 border border-border/60 space-y-1 text-[11px] text-muted-foreground">
+                {chart.explanation && (
+                  <p><span className="font-semibold text-foreground">Meaning:</span> {chart.explanation}</p>
+                )}
+                {chart.limitations && (
+                  <p><span className="font-semibold text-foreground">Limitations:</span> {chart.limitations}</p>
+                )}
+              </div>
+            )}
+          </div>
+        )}
       </CardContent>
     </Card>
   )
