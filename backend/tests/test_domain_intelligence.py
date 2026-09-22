@@ -111,7 +111,7 @@ class TestDomainIntelligence(unittest.TestCase):
 
         risks = detect_risks_and_anomalies(df, profiles, capabilities.risks)
         self.assertGreater(len(risks), 0)
-        self.assertTrue(any(r.label in ("Potential anomaly", "Requires investigation", "Unusual pattern detected") for r in risks))
+        self.assertTrue(any(r.label in ("Potential anomaly", "Requires investigation", "Unusual pattern detected", "Outlier observation", "Dependency risk", "High concentration") for r in risks))
 
         recs = generate_evidence_based_recommendations(
             blueprint=blueprint,

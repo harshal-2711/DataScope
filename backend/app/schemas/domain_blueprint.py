@@ -108,6 +108,7 @@ class RiskItemSchema(BaseModel):
     unit: Optional[str] = None
     time_period: Optional[str] = None
     evidence: str = ""
+    why_it_matters: Optional[str] = None
     confidence: float = 0.90
     qualification: Optional[str] = None
     recommended_action: str = ""

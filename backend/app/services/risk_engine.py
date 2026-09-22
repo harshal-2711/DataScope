@@ -1,10 +1,9 @@
 """Universal, Domain-Aware Risk and Anomaly Detection Engine.
 
-Automatically detects, classifies, prioritizes, and explains potential risks
-across diverse industry domains (E-Commerce, Finance, Healthcare, HR, Operations,
-Procurement, Sports, and General Tabular Datasets).
+Surfaces only meaningful, evidence-based risks using simple human-readable explanations,
+transparent severity classifications, and cautious, qualified recommendations.
 
-All conclusions are evidence-based, mathematically grounded, and neutrally framed.
+Eliminates misleading concentration signals and non-summable metric summations.
 """
 from __future__ import annotations
 
@@ -22,10 +21,11 @@ from app.schemas.domain_blueprint import (
     RiskOverviewSchema,
     RiskIntelligenceResponse,
 )
-from app.services.column_formatter import detect_column_unit, format_metric_display
+from app.services.column_formatter import detect_column_unit, format_metric_display, humanize_column_name
 from app.services.column_profiler import ColumnProfile
 
 
+# Polarity mappings
 _NEGATIVE_POLARITY_TERMS = {
     "cost", "expense", "spend", "loss", "losses", "defect", "defects", "defect_rate",
     "error", "errors", "error_rate", "delay", "delays", "delivery_time", "lead_time",
@@ -44,34 +44,77 @@ _POSITIVE_POLARITY_TERMS = {
     "yield", "output", "traffic", "subscribers", "active_users", "pass_rate", "satisfaction",
 }
 
+# Non-summable metric keywords: metrics that make NO mathematical sense to sum across categories
+_NON_SUMMABLE_METRIC_TERMS = {
+    "aging", "age", "days", "tenure", "tenure_days", "rating", "score", "temperature",
+    "rank", "ranking", "year", "month", "id", "code", "postal", "zip", "pct",
+    "percent", "percentage", "rate", "ratio", "margin", "discount", "discount_rate",
+    "lat", "latitude", "lon", "longitude", "phone", "duration", "avg", "average",
+}
+
+# Meaningful volume/financial metrics for concentration evaluation
+_VALID_CONCENTRATION_METRICS = {
+    "sales", "revenue", "gross_sales", "net_sales", "spend", "total_spend", "cost",
+    "orders", "order_volume", "volume", "units_sold", "contract_value", "tender_value",
+    "amount", "freight_value", "gmv",
+}
+
+# Meaningful dependency grouping dimensions
+_VALID_DEPENDENCY_DIMENSIONS = {
+    "customer", "customer_name", "customer_id", "client", "buyer", "buyer_agency",
+    "supplier", "vendor", "supplier_name", "vendor_name", "partner", "account",
+    "borrower", "doctor", "provider", "hospital", "facility",
+}
+
+# Non-dependency / client-side UI dimensions
+_NON_DEPENDENCY_DIMENSIONS = {
+    "login", "customer_login_type", "login_type", "device", "device_type", "browser",
+    "os", "platform", "channel", "payment", "payment_method", "gender", "status",
+    "stage", "city", "state", "region", "country", "type", "method", "category", "tag",
+}
+
 
 def _is_negative_polarity(column_name: str) -> bool:
     """Return True if an increase in this metric represents an adverse/risky condition."""
     name_clean = str(column_name).lower().strip().replace("-", "_").replace(" ", "_")
     tokens = set(re.findall(r"[a-z0-9]+", name_clean))
-    return bool(tokens & _NEGATIVE_POLARITY_TERMS) or any(term in name_clean for term in _NEGATIVE_POLARITY_TERMS)
+    if tokens & _NEGATIVE_POLARITY_TERMS:
+        return True
+    padded = f"_{name_clean}_"
+    return any(f"_{term}_" in padded for term in _NEGATIVE_POLARITY_TERMS)
 
 
 def _is_positive_polarity(column_name: str) -> bool:
     """Return True if a decrease in this metric represents an adverse/risky condition."""
     name_clean = str(column_name).lower().strip().replace("-", "_").replace(" ", "_")
     tokens = set(re.findall(r"[a-z0-9]+", name_clean))
-    return bool(tokens & _POSITIVE_POLARITY_TERMS) or any(term in name_clean for term in _POSITIVE_POLARITY_TERMS)
+    if tokens & _POSITIVE_POLARITY_TERMS:
+        return True
+    padded = f"_{name_clean}_"
+    return any(f"_{term}_" in padded for term in _POSITIVE_POLARITY_TERMS)
+
+
+def _is_non_summable_metric(column_name: str) -> bool:
+    """Return True if summing this metric across categories is mathematically misleading."""
+    name_clean = str(column_name).lower().strip().replace("-", "_").replace(" ", "_")
+    tokens = set(re.findall(r"[a-z0-9]+", name_clean))
+    if tokens & _NON_SUMMABLE_METRIC_TERMS:
+        return True
+    padded = f"_{name_clean}_"
+    return any(f"_{term}_" in padded for term in _NON_SUMMABLE_METRIC_TERMS)
+
 
 
 def _find_date_column(df: pd.DataFrame, profiles: List[ColumnProfile]) -> Optional[str]:
     """Identify the most reliable datetime column in the dataset."""
-    # 1. Check profile roles
     for p in profiles:
         if p.role in ("datetime", "time", "date") and p.name in df.columns:
             return p.name
 
-    # 2. Check column dtypes
     for col in df.columns:
         if pd.api.types.is_datetime64_any_dtype(df[col]):
             return col
 
-    # 3. Check name heuristics with date conversion test
     date_keywords = ["date", "time", "timestamp", "period", "day", "month", "year", "order_date", "transaction_date"]
     for col in df.columns:
         col_lower = str(col).lower()
@@ -149,7 +192,7 @@ def compute_full_risk_intelligence(
         )
 
     # -------------------------------------------------------------------------
-    # 1. DATA QUALITY & INTEGRITY SIGNALS
+    # 1. DATA QUALITY & INTEGRITY ISSUES
     # -------------------------------------------------------------------------
     # 1a. Duplicate Records
     dup_count = int(df.duplicated().sum())
@@ -161,36 +204,37 @@ def compute_full_risk_intelligence(
         risks.append(
             RiskItemSchema(
                 risk_id="dq_duplicate_records",
-                title="Duplicate Data Records",
-                category="Data Quality",
-                label="Potential anomaly",
-                description=f"Detected {dup_count:,} duplicate rows representing {dup_pct:.1f}% of all records.",
+                title="Duplicate data records detected",
+                category="Data Quality Issue",
+                label="Data hygiene issue",
+                description=f"Found {dup_count:,} duplicate rows ({dup_pct:.1f}% of the dataset).",
                 severity=severity,
                 severity_reason=(
-                    f"Classified as {severity.upper()} severity because duplicate records exceed "
-                    f"{'10%' if is_high else '2%'} of total volume, which may distort aggregate metrics."
+                    f"Duplicate rows exceed {'10%' if is_high else '2%'} of total records, "
+                    "which may skew aggregate totals and statistics."
                 ),
                 affected_metric=None,
                 affected_column=None,
                 current_value=float(dup_count),
-                current_value_formatted=f"{dup_count:,} rows",
+                current_value_formatted=f"{dup_count:,} duplicates",
                 previous_value=0.0,
-                previous_value_formatted="0 rows",
+                previous_value_formatted="0 duplicates",
                 absolute_change=float(dup_count),
-                absolute_change_formatted=f"+{dup_count:,} duplicates",
+                absolute_change_formatted=f"+{dup_count:,}",
                 pct_change=round(dup_pct, 1),
                 unit="records",
                 time_period="Full Dataset",
-                evidence=f"{dup_count} duplicate row entries out of {row_count} total rows ({dup_pct:.1f}%).",
+                evidence=f"{dup_count:,} identical row entries out of {row_count:,} total records.",
+                why_it_matters="Redundant entries can lead to double-counting in KPI sums and skewed category counts.",
                 confidence=0.98,
-                qualification="Calculated by strict full-row exact matching across all columns.",
-                recommended_action="Review upstream data ingestion and deduplicate redundant records before executive reporting.",
+                qualification="Identified through exact row-level matching across all columns.",
+                recommended_action="Review data ingestion or deduplicate rows before final analysis.",
                 risk_type="data_quality",
             )
         )
         seen_risk_keys.add("dq_duplicate_records")
 
-    # 1b. Missing Data / Null Values
+    # 1b. Missing Data in Key Columns
     for prof in profiles:
         if prof.null_count > 0 and row_count > 0:
             null_pct = (prof.null_count / row_count) * 100.0
@@ -198,19 +242,17 @@ def compute_full_risk_intelligence(
                 data_quality_count += 1
                 is_high = null_pct >= 50.0
                 severity = "high" if is_high else ("medium" if null_pct >= 30.0 else "low")
-                col_formatted, unit_lbl = _format_val(float(prof.null_count), prof.name, domain.domain_id, dataset_currency)
+                human_col = humanize_column_name(prof.name)
+
                 risks.append(
                     RiskItemSchema(
                         risk_id=f"dq_missing_{prof.name}",
-                        title=f"High Missingness in '{prof.name}'",
-                        category="Data Quality",
-                        label="Requires investigation",
-                        description=f"Column '{prof.name}' is missing {null_pct:.1f}% of its entries ({prof.null_count:,} unrecorded rows).",
+                        title=f"High proportion of missing values in '{human_col}'",
+                        category="Data Quality Issue",
+                        label="Missing data",
+                        description=f"'{human_col}' is missing {null_pct:.1f}% of its values ({prof.null_count:,} unrecorded rows).",
                         severity=severity,
-                        severity_reason=(
-                            f"Classified as {severity.upper()} severity due to {null_pct:.1f}% unrecorded data in '{prof.name}', "
-                            "limiting statistical reliability."
-                        ),
+                        severity_reason=f"Over {null_pct:.1f}% of records lack data in this field.",
                         affected_metric=prof.name,
                         affected_column=prof.name,
                         current_value=float(prof.null_count),
@@ -222,52 +264,49 @@ def compute_full_risk_intelligence(
                         pct_change=round(null_pct, 1),
                         unit="records",
                         time_period="Full Dataset",
-                        evidence=f"{prof.null_count} null records out of {row_count} total records ({null_pct:.1f}% missing).",
+                        evidence=f"{prof.null_count:,} null values out of {row_count:,} rows ({null_pct:.1f}%).",
+                        why_it_matters="High missingness limits the statistical reliability of metrics derived from this column.",
                         confidence=0.99,
-                        qualification="Evaluated directly from pandas null / NaN profiling.",
-                        recommended_action=f"Audit upstream capture for '{prof.name}' or apply documented imputation if required.",
+                        qualification="Counted directly from unpopulated data cells.",
+                        recommended_action=f"Check upstream data collection for '{human_col}' or apply appropriate imputation if necessary.",
                         risk_type="data_quality",
                     )
                 )
                 seen_risk_keys.add(f"dq_missing_{prof.name}")
 
-    # 1c. Extreme Statistical Outliers (3x IQR)
+    # 1c. Statistical Outliers
     for prof in profiles:
         if prof.role == "numeric" and prof.name in df.columns:
             s = pd.to_numeric(df[prof.name], errors="coerce").dropna()
-            if len(s) >= 20:
+            if len(s) >= 20 and not _is_non_summable_metric(prof.name):
                 q25 = float(s.quantile(0.25))
                 q75 = float(s.quantile(0.75))
                 iqr = q75 - q25
                 if iqr > 1e-6:
                     upper_bound = q75 + (3.0 * iqr)
-                    lower_bound = q25 - (3.0 * iqr)
                     high_outliers = s[s > upper_bound]
-                    low_outliers = s[s < lower_bound]
-                    total_outliers = len(high_outliers) + len(low_outliers)
+                    total_outliers = len(high_outliers)
                     outlier_pct = (total_outliers / len(s)) * 100.0
 
                     if total_outliers > 0 and outlier_pct >= 1.5:
-                        severity = "high" if outlier_pct >= 8.0 else ("medium" if outlier_pct >= 3.0 else "low")
+                        severity = "medium" if outlier_pct >= 5.0 else "low"
                         max_val = float(s.max())
+                        human_col = humanize_column_name(prof.name)
                         formatted_max, unit_lbl = _format_val(max_val, prof.name, domain.domain_id, dataset_currency)
                         formatted_thresh, _ = _format_val(upper_bound, prof.name, domain.domain_id, dataset_currency)
 
                         risks.append(
                             RiskItemSchema(
                                 risk_id=f"stat_outlier_{prof.name}",
-                                title=f"Extreme Statistical Outliers in '{prof.name}'",
-                                category="Statistical Dispersion",
-                                label="Unusual pattern detected",
+                                title=f"Unusual high values detected in '{human_col}'",
+                                category="Unusual Outlier",
+                                label="Outlier observation",
                                 description=(
-                                    f"Found {total_outliers} extreme values in '{prof.name}' exceeding the 3.0× IQR threshold "
-                                    f"({formatted_thresh or round(upper_bound, 2)})."
+                                    f"Found {total_outliers} unusually high values in '{human_col}' exceeding "
+                                    f"the upper threshold of {formatted_thresh}."
                                 ),
                                 severity=severity,
-                                severity_reason=(
-                                    f"Classified as {severity.upper()} severity because {outlier_pct:.1f}% of data points "
-                                    "deviate substantially beyond standard interquartile spread."
-                                ),
+                                severity_reason=f"{outlier_pct:.1f}% of records exceed the standard 3.0× IQR fence.",
                                 affected_metric=prof.name,
                                 affected_column=prof.name,
                                 current_value=max_val,
@@ -279,20 +318,18 @@ def compute_full_risk_intelligence(
                                 pct_change=round(outlier_pct, 1),
                                 unit=unit_lbl or "units",
                                 time_period="Full Distribution",
-                                evidence=(
-                                    f"Max observed value is {formatted_max} vs 3× IQR upper limit of {formatted_thresh} "
-                                    f"({total_outliers} outlier records, {outlier_pct:.1f}% of series)."
-                                ),
+                                evidence=f"Highest value is {formatted_max} vs expected threshold {formatted_thresh}.",
+                                why_it_matters="Extreme values can skew averages and may indicate data entry errors or exceptional transactions.",
                                 confidence=0.92,
-                                qualification="Calculated using Tukey's extreme outlier fence (Q3 + 3.0 * IQR).",
-                                recommended_action="Audit outlier transactions for entry errors, exceptional promotions, or anomalous spikes.",
+                                qualification="Calculated using Tukey's statistical dispersion fence (Q3 + 3.0 * IQR).",
+                                recommended_action=f"Review the highest records in '{human_col}' to confirm whether they represent valid activity.",
                                 risk_type="outlier",
                             )
                         )
                         seen_risk_keys.add(f"stat_outlier_{prof.name}")
 
     # -------------------------------------------------------------------------
-    # 2. TIME-SERIES & TREND PERFORMANCE RISKS
+    # 2. TIME-SERIES PERFORMANCE & COST RISKS
     # -------------------------------------------------------------------------
     date_col = _find_date_column(df, profiles)
     has_time_dimension = date_col is not None
@@ -310,10 +347,10 @@ def compute_full_risk_intelligence(
 
                 numeric_cols = [
                     p.name for p in profiles
-                    if p.role == "numeric" and p.name in df_time.columns and p.name != date_col
+                    if p.role == "numeric" and p.name in df_time.columns and p.name != date_col and not _is_non_summable_metric(p.name)
                 ]
 
-                for met in numeric_cols[:6]:
+                for met in numeric_cols[:5]:
                     s_clean = pd.to_numeric(df_time[met], errors="coerce")
                     if s_clean.notna().sum() < 6:
                         continue
@@ -344,6 +381,7 @@ def compute_full_risk_intelligence(
                         for i in range(max(0, n_periods - 12), n_periods)
                     ]
 
+                    human_met = humanize_column_name(met)
                     curr_fmt, unit_lbl = _format_val(curr_val, met, domain.domain_id, dataset_currency)
                     prev_fmt, _ = _format_val(prev_val, met, domain.domain_id, dataset_currency)
                     abs_fmt, _ = _format_val(abs_change, met, domain.domain_id, dataset_currency)
@@ -351,7 +389,7 @@ def compute_full_risk_intelligence(
                     is_neg_metric = _is_negative_polarity(met)
                     is_pos_metric = _is_positive_polarity(met)
 
-                    # 2a. Performance Decline
+                    # 2a. Performance / Revenue / Profit Decline
                     if (is_pos_metric or not is_neg_metric) and pct_change <= -5.0:
                         is_sustained = (
                             n_periods >= 3 and vals[-1] < vals[-2] < vals[-3]
@@ -360,36 +398,27 @@ def compute_full_risk_intelligence(
                         is_med = pct_change <= -15.0 or is_sustained
                         severity = "high" if is_high else ("medium" if is_med else "low")
 
-                        title = f"Decline in {met}"
-                        if domain.domain_id in ("ecommerce", "sales_marketing", "retail") and any(k in met.lower() for k in ("sales", "revenue")):
-                            title = "Revenue Contraction"
-                        elif domain.domain_id in ("finance", "fintech") and any(k in met.lower() for k in ("profit", "margin", "income")):
-                            title = "Profit Margin Compression"
-                        elif domain.domain_id in ("people_hr", "hr") and any(k in met.lower() for k in ("attendance", "headcount")):
-                            title = "Workforce Participation Decline"
-                        elif domain.domain_id in ("sports", "sports_performance") and any(k in met.lower() for k in ("win", "score", "points")):
-                            title = "Sports Performance Contraction"
-                        elif domain.domain_id in ("healthcare", "healthcare_life") and any(k in met.lower() for k in ("patient", "volume", "admission")):
-                            title = "Patient Volume Shift"
-                        elif domain.domain_id in ("procurement", "logistics_travel") and any(k in met.lower() for k in ("order", "volume")):
-                            title = "Order Volume Contraction"
+                        # Assign clean category
+                        if any(k in met.lower() for k in ("sales", "revenue", "profit", "income", "margin")):
+                            category = "Revenue/Profit Risk"
+                        else:
+                            category = "Performance Decline"
 
-                        sustained_text = " (exhibiting sustained consecutive-period decline)" if is_sustained else ""
+                        title = f"{human_met} decreased compared with the previous period"
+                        sustained_note = " with a sustained downward trend over consecutive periods" if is_sustained else ""
+
                         risks.append(
                             RiskItemSchema(
                                 risk_id=f"trend_decline_{met}",
                                 title=title,
-                                category="Performance Trend",
-                                label="Requires investigation" if severity in ("high", "medium") else "Potential anomaly",
+                                category=category,
+                                label="Noticeable decline" if severity in ("high", "medium") else "Minor decline",
                                 description=(
-                                    f"'{met}' decreased by {abs(pct_change):.1f}% from {prev_fmt} ({periods[-2]}) "
-                                    f"to {curr_fmt} ({periods[-1]}){sustained_text}."
+                                    f"'{human_met}' decreased by {abs(pct_change):.1f}% from {prev_fmt} ({periods[-2]}) "
+                                    f"to {curr_fmt} ({periods[-1]}){sustained_note}."
                                 ),
                                 severity=severity,
-                                severity_reason=(
-                                    f"Classified as {severity.upper()} severity due to a {abs(pct_change):.1f}% period-over-period decline"
-                                    f"{' with multi-period persistence' if is_sustained else ''}."
-                                ),
+                                severity_reason=f"Period-over-period decline of {abs(pct_change):.1f}%{' persisting across multiple periods' if is_sustained else ''}.",
                                 affected_metric=met,
                                 affected_column=met,
                                 current_value=curr_val,
@@ -401,22 +430,18 @@ def compute_full_risk_intelligence(
                                 pct_change=round(pct_change, 1),
                                 unit=unit_lbl or "units",
                                 time_period=f"{periods[-2]} to {periods[-1]} ({freq_label})",
-                                evidence=(
-                                    f"Period comparison: Previous={prev_fmt}, Latest={curr_fmt}, "
-                                    f"Delta={abs_fmt} ({pct_change:+.1f}%)."
-                                ),
+                                evidence=f"Previous period: {prev_fmt} → Current period: {curr_fmt} ({pct_change:+.1f}%).",
+                                why_it_matters=f"Continued declines in '{human_met}' may impact overall performance and strategic goals.",
                                 confidence=0.94,
-                                qualification="Calculated from period-aggregated time-series historical values without external assumptions.",
-                                recommended_action=(
-                                    f"Investigate recent drivers behind '{met}' contraction across underlying operational segments."
-                                ),
+                                qualification="Calculated directly from chronological period aggregation.",
+                                recommended_action=f"Investigate the underlying segments or categories contributing to the decline in '{human_met}'.",
                                 risk_type="performance_decline",
                                 time_series_preview=preview_points,
                             )
                         )
                         seen_risk_keys.add(f"trend_decline_{met}")
 
-                    # 2b. Cost / Expense / Defect / Delay Escalation
+                    # 2b. Cost / Delay / Expense Increase
                     elif is_neg_metric and pct_change >= 10.0:
                         is_sustained = (
                             n_periods >= 3 and vals[-1] > vals[-2] > vals[-3]
@@ -425,32 +450,21 @@ def compute_full_risk_intelligence(
                         is_med = pct_change >= 15.0 or is_sustained
                         severity = "high" if is_high else ("medium" if is_med else "low")
 
-                        title = f"Escalation in {met}"
-                        if any(k in met.lower() for k in ("cost", "expense", "spend")):
-                            title = "Cost & Expenditure Surge"
-                        elif any(k in met.lower() for k in ("defect", "error", "failure")):
-                            title = "Defect Rate Surge"
-                        elif any(k in met.lower() for k in ("delay", "lead_time", "delivery_time")):
-                            title = "Operational Lead Time Delay"
-                        elif any(k in met.lower() for k in ("attrition", "turnover", "churn")):
-                            title = "Turnover Rate Escalation"
-                        elif any(k in met.lower() for k in ("refund", "return", "cancellation")):
-                            title = "Cancellation / Refund Rate Spike"
+                        category = "Cost Increase" if any(k in met.lower() for k in ("cost", "expense", "spend")) else "Operational Risk"
+                        title = f"{human_met} increased compared with the previous period"
 
                         risks.append(
                             RiskItemSchema(
                                 risk_id=f"trend_escalation_{met}",
                                 title=title,
-                                category="Cost & Operational Risk",
-                                label="Requires investigation" if severity in ("high", "medium") else "Potential anomaly",
+                                category=category,
+                                label="Noticeable increase" if severity in ("high", "medium") else "Moderate increase",
                                 description=(
-                                    f"'{met}' surged by {pct_change:.1f}% from {prev_fmt} ({periods[-2]}) "
+                                    f"'{human_met}' rose by {pct_change:.1f}% from {prev_fmt} ({periods[-2]}) "
                                     f"to {curr_fmt} ({periods[-1]})."
                                 ),
                                 severity=severity,
-                                severity_reason=(
-                                    f"Classified as {severity.upper()} severity due to a {pct_change:.1f}% adverse increase in '{met}'."
-                                ),
+                                severity_reason=f"Period-over-period adverse rise of {pct_change:.1f}%.",
                                 affected_metric=met,
                                 affected_column=met,
                                 current_value=curr_val,
@@ -462,88 +476,93 @@ def compute_full_risk_intelligence(
                                 pct_change=round(pct_change, 1),
                                 unit=unit_lbl or "units",
                                 time_period=f"{periods[-2]} to {periods[-1]} ({freq_label})",
-                                evidence=(
-                                    f"Period comparison: Previous={prev_fmt}, Latest={curr_fmt}, "
-                                    f"Delta={abs_fmt} ({pct_change:+.1f}%)."
-                                ),
+                                evidence=f"Previous period: {prev_fmt} → Current period: {curr_fmt} ({pct_change:+.1f}%).",
+                                why_it_matters=f"Unchecked growth in '{human_met}' can compress operating margins and reduce operational efficiency.",
                                 confidence=0.93,
                                 qualification="Calculated from chronological period aggregation.",
-                                recommended_action=(
-                                    f"Audit cost allocation and workflow bottlenecks causing elevated '{met}' levels."
-                                ),
+                                recommended_action=f"Audit recent drivers or expenditure categories causing elevated '{human_met}'.",
                                 risk_type="cost_escalation",
                                 time_series_preview=preview_points,
                             )
                         )
                         seen_risk_keys.add(f"trend_escalation_{met}")
 
-                    # 2c. Time-Series Volatility Risk
+                    # 2c. Time-Series Volatility
                     if n_periods >= 4:
                         mean_val = float(np.mean(vals))
                         std_val = float(np.std(vals))
                         if abs(mean_val) > 1e-6:
                             cv = std_val / abs(mean_val)
-                            if cv >= 0.45:
-                                severity = "high" if cv >= 0.80 else "medium"
+                            if cv >= 0.50:
+                                severity = "medium" if cv < 0.85 else "high"
                                 risks.append(
                                     RiskItemSchema(
                                         risk_id=f"trend_volatility_{met}",
-                                        title=f"High Volatility in '{met}'",
-                                        category="Stability & Volatility",
-                                        label="Unusual pattern detected",
+                                        title=f"High variation observed in '{human_met}'",
+                                        category="High Volatility",
+                                        label="Volatility observation",
                                         description=(
-                                            f"'{met}' exhibits erratic swings over time with a coefficient of variation "
-                                            f"of {cv * 100.0:.1f}% (standard deviation: {std_val:,.2f} vs mean: {mean_val:,.2f})."
+                                            f"'{human_met}' shows notable fluctuations over time with a coefficient "
+                                            f"of variation of {cv * 100.0:.1f}% (standard deviation: {std_val:,.2f} vs average: {mean_val:,.2f})."
                                         ),
                                         severity=severity,
-                                        severity_reason=(
-                                            f"Classified as {severity.upper()} severity due to a high dispersion ratio "
-                                            f"(CV = {cv * 100.0:.1f}%), indicating low baseline predictability."
-                                        ),
+                                        severity_reason=f"Dispersion ratio (CV = {cv * 100.0:.1f}%) indicates significant period swings.",
                                         affected_metric=met,
                                         affected_column=met,
                                         current_value=std_val,
                                         current_value_formatted=f"±{std_val:,.2f}",
                                         previous_value=mean_val,
-                                        previous_value_formatted=f"Mean {mean_val:,.2f}",
+                                        previous_value_formatted=f"Average {mean_val:,.2f}",
                                         absolute_change=std_val,
                                         absolute_change_formatted=f"σ = {std_val:,.2f}",
                                         pct_change=round(cv * 100.0, 1),
                                         unit=unit_lbl or "units",
                                         time_period=f"{periods[0]} to {periods[-1]} ({len(periods)} periods)",
-                                        evidence=(
-                                            f"Mean={mean_val:,.2f}, StdDev={std_val:,.2f}, CV={cv * 100.0:.1f}% "
-                                            f"across {len(periods)} observation periods."
-                                        ),
+                                        evidence=f"Average = {mean_val:,.2f}, Standard Deviation = {std_val:,.2f} across {len(periods)} periods.",
+                                        why_it_matters="High unpredictability makes forecasting, budgeting, and capacity planning more challenging.",
                                         confidence=0.88,
                                         qualification="Derived from historical empirical coefficient of variation (CV = σ / μ).",
-                                        recommended_action=f"Assess potential demand smoothing or operational buffers to mitigate volatility in '{met}'.",
+                                        recommended_action=f"Analyze drivers of volatility in '{human_met}' to determine if fluctuations are seasonal or sporadic.",
                                         risk_type="volatility",
                                         time_series_preview=preview_points,
                                     )
                                 )
                                 seen_risk_keys.add(f"trend_volatility_{met}")
         except Exception:
-            data_safety_notes.append("Time-series risk evaluation encountered unparseable date formats; defaulted to cross-sectional analysis.")
+            data_safety_notes.append("Time-series risk evaluation encountered unparseable dates; defaulted to cross-sectional checks.")
 
     # -------------------------------------------------------------------------
-    # 3. CROSS-SECTIONAL & OPERATIONAL DOMAIN SIGNALS
+    # 3. CROSS-SECTIONAL & OPERATIONAL SIGNALS (CLEAN & NON-MISLEADING)
     # -------------------------------------------------------------------------
+    # 3a. Meaningful Concentration on Valid Dependencies ONLY
     categorical_cols = [
         p.name for p in profiles
         if p.role in ("categorical", "identifier") and p.name in df.columns and p.distinct_count and 2 <= p.distinct_count <= 200
     ]
     numeric_cols_all = [
         p.name for p in profiles
-        if p.role == "numeric" and p.name in df.columns
+        if p.role == "numeric" and p.name in df.columns and not _is_non_summable_metric(p.name)
     ]
 
-    # 3a. Concentration Risk (Single Entity Dominance)
-    for dim_col in categorical_cols[:3]:
-        for met_col in numeric_cols_all[:3]:
+    for dim_col in categorical_cols:
+        dim_lower = str(dim_col).lower().replace("-", "_").replace(" ", "_")
+        
+        # Check if dimension is a non-dependency / UI type (e.g. Device_Type, Login_Type, Browser, OS, Payment_Method)
+        is_non_dep = any(term in dim_lower for term in _NON_DEPENDENCY_DIMENSIONS)
+        is_valid_dep = any(term in dim_lower for term in _VALID_DEPENDENCY_DIMENSIONS)
+
+        for met_col in numeric_cols_all:
+            met_lower = str(met_col).lower().replace("-", "_").replace(" ", "_")
+
+            # Check if metric is a valid volume/financial metric
+            is_valid_met = any(term in met_lower for term in _VALID_CONCENTRATION_METRICS)
+            if not is_valid_met and not is_valid_dep:
+                continue
+
             key = f"conc_{dim_col}_{met_col}"
             if key in seen_risk_keys:
                 continue
+
             try:
                 clean = df[[dim_col, met_col]].dropna()
                 if len(clean) >= 15:
@@ -554,26 +573,26 @@ def compute_full_risk_intelligence(
                         top_name = str(grouped.idxmax())
                         top_share = (top_val / total_vol) * 100.0
 
-                        if top_share >= 50.0:
-                            severity = "high" if top_share >= 70.0 else "medium"
+                        # Case A: True Business Dependency (Customer / Supplier on Revenue / Spend)
+                        if is_valid_dep and top_share >= 50.0:
+                            severity = "high" if top_share >= 80.0 else "medium"
+                            human_dim = humanize_column_name(dim_col)
+                            human_met = humanize_column_name(met_col)
                             top_val_fmt, unit_lbl = _format_val(top_val, met_col, domain.domain_id, dataset_currency)
                             tot_val_fmt, _ = _format_val(total_vol, met_col, domain.domain_id, dataset_currency)
 
                             risks.append(
                                 RiskItemSchema(
                                     risk_id=key,
-                                    title=f"Severe Concentration in '{dim_col}'",
-                                    category="Concentration & Dependency",
-                                    label="Unusual pattern detected",
+                                    title=f"High concentration in {human_dim}: {top_name}",
+                                    category="Operational Risk",
+                                    label="Dependency risk",
                                     description=(
-                                        f"Single entity '{top_name}' accounts for {top_share:.1f}% of total '{met_col}' "
+                                        f"Single entity '{top_name}' represents {top_share:.1f}% of total '{human_met}' "
                                         f"({top_val_fmt} out of {tot_val_fmt})."
                                     ),
                                     severity=severity,
-                                    severity_reason=(
-                                        f"Classified as {severity.upper()} severity because a single entity exceeds "
-                                        f"{'70%' if severity == 'high' else '50%'} concentration, creating vulnerability."
-                                    ),
+                                    severity_reason=f"Top entity accounts for {top_share:.1f}% of total volume across {len(grouped)} entities.",
                                     affected_metric=met_col,
                                     affected_column=dim_col,
                                     current_value=top_val,
@@ -585,16 +604,50 @@ def compute_full_risk_intelligence(
                                     pct_change=round(top_share, 1),
                                     unit=unit_lbl or "units",
                                     time_period="Full Dataset",
-                                    evidence=(
-                                        f"Top entity '{top_name}' accounts for {top_val_fmt} of total {tot_val_fmt} "
-                                        f"({top_share:.1f}% share among {len(grouped)} unique {dim_col} entities)."
-                                    ),
+                                    evidence=f"'{top_name}' contributes {top_val_fmt} of total {tot_val_fmt} ({top_share:.1f}% share).",
+                                    why_it_matters="High reliance on a single entity creates operational vulnerability if their activity changes.",
                                     confidence=0.95,
                                     qualification="Evaluated directly from entity summation over available records.",
-                                    recommended_action=(
-                                        f"Develop diversification strategies to reduce operational dependency on top entity '{top_name}'."
-                                    ),
+                                    recommended_action=f"Assess diversification options to balance operational dependency on '{top_name}'.",
                                     risk_type="concentration",
+                                )
+                            )
+                            seen_risk_keys.add(key)
+                            break
+
+                        # Case B: Descriptive Distribution Observation (e.g. 85%+ in Payment Method or Channel) - LOW severity only
+                        elif is_non_dep and top_share >= 80.0:
+                            human_dim = humanize_column_name(dim_col)
+                            human_met = humanize_column_name(met_col)
+                            top_val_fmt, unit_lbl = _format_val(top_val, met_col, domain.domain_id, dataset_currency)
+                            tot_val_fmt, _ = _format_val(total_vol, met_col, domain.domain_id, dataset_currency)
+
+                            risks.append(
+                                RiskItemSchema(
+                                    risk_id=key,
+                                    title=f"Majority volume in {human_dim}: {top_name}",
+                                    category="Distribution Observation",
+                                    label="Distribution pattern",
+                                    description=f"'{top_name}' accounts for {top_share:.1f}% of recorded '{human_met}'.",
+                                    severity="low",
+                                    severity_reason="Descriptive categorical pattern; does not automatically constitute operational vulnerability.",
+                                    affected_metric=met_col,
+                                    affected_column=dim_col,
+                                    current_value=top_val,
+                                    current_value_formatted=top_val_fmt,
+                                    previous_value=total_vol,
+                                    previous_value_formatted=tot_val_fmt,
+                                    absolute_change=top_val,
+                                    absolute_change_formatted=f"{top_share:.1f}% share",
+                                    pct_change=round(top_share, 1),
+                                    unit=unit_lbl or "units",
+                                    time_period="Full Dataset",
+                                    evidence=f"'{top_name}' represents {top_share:.1f}% of total {human_met}.",
+                                    why_it_matters="Understanding dominant categories helps contextualize overall data composition.",
+                                    confidence=0.90,
+                                    qualification="Descriptive observational distribution.",
+                                    recommended_action=f"Consider whether sub-segmenting by '{human_dim}' provides additional insights.",
+                                    risk_type="distribution_observation",
                                 )
                             )
                             seen_risk_keys.add(key)
@@ -602,7 +655,7 @@ def compute_full_risk_intelligence(
             except Exception:
                 continue
 
-    # 3b. Negative Profit / Operating Losses
+    # 3b. Operating Losses / Negative Margins
     for prof in profiles:
         if prof.role == "numeric" and prof.name in df.columns:
             name_lower = prof.name.lower()
@@ -614,22 +667,21 @@ def compute_full_risk_intelligence(
                     total_sum = float(s.sum())
 
                     if total_sum < 0 or neg_pct >= 15.0:
-                        severity = "high" if total_sum < 0 or neg_pct >= 35.0 else "medium"
+                        severity = "high" if total_sum < 0 else "medium"
+                        human_col = humanize_column_name(prof.name)
                         tot_fmt, unit_lbl = _format_val(total_sum, prof.name, domain.domain_id, dataset_currency)
                         risks.append(
                             RiskItemSchema(
                                 risk_id=f"financial_loss_{prof.name}",
-                                title="Negative Profitability & Losses",
-                                category="Financial Performance",
-                                label="Requires investigation",
+                                title=f"Operating losses observed in '{human_col}'",
+                                category="Revenue/Profit Risk",
+                                label="Loss observation",
                                 description=(
-                                    f"Dataset contains {neg_count:,} unprofitable transactions ({neg_pct:.1f}% of total) "
-                                    f"resulting in net aggregate '{prof.name}' of {tot_fmt}."
+                                    f"Dataset contains {neg_count:,} negative entries ({neg_pct:.1f}% of records) "
+                                    f"with a net total of {tot_fmt}."
                                 ),
                                 severity=severity,
-                                severity_reason=(
-                                    f"Classified as {severity.upper()} severity because {'net total is negative' if total_sum < 0 else f'{neg_pct:.1f}% of transactions operate at a loss'}."
-                                ),
+                                severity_reason="Net aggregate is negative" if total_sum < 0 else f"{neg_pct:.1f}% of records are unprofitable.",
                                 affected_metric=prof.name,
                                 affected_column=prof.name,
                                 current_value=total_sum,
@@ -641,16 +693,17 @@ def compute_full_risk_intelligence(
                                 pct_change=round(neg_pct, 1),
                                 unit=unit_lbl or "₹",
                                 time_period="Full Dataset",
-                                evidence=f"{neg_count} negative records ({neg_pct:.1f}%), net sum is {tot_fmt}.",
+                                evidence=f"{neg_count:,} loss records out of {len(s):,} total transactions (net sum: {tot_fmt}).",
+                                why_it_matters="Negative margins erode profitability and may indicate underpriced products or excessive discounts.",
                                 confidence=0.96,
-                                qualification="Calculated by identifying records where profit < 0.",
-                                recommended_action="Audit negative-margin items, discounts, or cost structures generating losses.",
+                                qualification="Calculated by identifying records where value < 0.",
+                                recommended_action=f"Review unprofitable transactions in '{human_col}' to pinpoint margin leaks.",
                                 risk_type="financial_loss",
                             )
                         )
                         seen_risk_keys.add(f"financial_loss_{prof.name}")
 
-    # 3c. Inventory Stockout / Low Stock Risk
+    # 3c. Inventory Stockout
     for prof in profiles:
         if prof.role == "numeric" and prof.name in df.columns:
             name_lower = prof.name.lower()
@@ -660,16 +713,17 @@ def compute_full_risk_intelligence(
                     zero_stock_count = int((s <= 0).sum())
                     zero_stock_pct = (zero_stock_count / len(s)) * 100.0
                     if zero_stock_count > 0 and zero_stock_pct >= 5.0:
-                        severity = "high" if zero_stock_pct >= 20.0 else "medium"
+                        severity = "medium" if zero_stock_pct < 25.0 else "high"
+                        human_col = humanize_column_name(prof.name)
                         risks.append(
                             RiskItemSchema(
                                 risk_id=f"inventory_stockout_{prof.name}",
-                                title="Inventory Stock-Out Risk",
-                                category="Operations & Supply",
-                                label="Requires investigation",
-                                description=f"Detected {zero_stock_count:,} inventory items ({zero_stock_pct:.1f}%) with zero or depleted stock levels.",
+                                title="Depleted inventory items detected",
+                                category="Operational Risk",
+                                label="Inventory notice",
+                                description=f"Found {zero_stock_count:,} items ({zero_stock_pct:.1f}%) with zero or negative recorded stock.",
                                 severity=severity,
-                                severity_reason=f"Classified as {severity.upper()} severity due to {zero_stock_pct:.1f}% stockout rate.",
+                                severity_reason=f"{zero_stock_pct:.1f}% of inventory records have zero available units.",
                                 affected_metric=prof.name,
                                 affected_column=prof.name,
                                 current_value=float(zero_stock_count),
@@ -677,107 +731,65 @@ def compute_full_risk_intelligence(
                                 previous_value=0.0,
                                 previous_value_formatted="0 items",
                                 absolute_change=float(zero_stock_count),
-                                absolute_change_formatted=f"+{zero_stock_count:,} depleted",
+                                absolute_change_formatted=f"+{zero_stock_count:,}",
                                 pct_change=round(zero_stock_pct, 1),
                                 unit="units",
                                 time_period="Full Dataset",
-                                evidence=f"{zero_stock_count} SKUs out of {len(s)} total items have stock <= 0 ({zero_stock_pct:.1f}%).",
+                                evidence=f"{zero_stock_count:,} SKUs with stock <= 0 out of {len(s):,} total items.",
+                                why_it_matters="Stockouts can lead to unfulfilled demand and lost revenue opportunities.",
                                 confidence=0.95,
                                 qualification="Evaluated from non-positive inventory records.",
-                                recommended_action="Trigger replenishment protocols for depleted SKUs to avoid lost sales.",
+                                recommended_action="Check replenishment schedules for depleted items to avoid availability bottlenecks.",
                                 risk_type="inventory_risk",
                             )
                         )
                         seen_risk_keys.add(f"inventory_stockout_{prof.name}")
 
-    # 3d. Domain-Specific: HR Employee Attrition
+    # 3d. HR Attrition
     if domain.domain_id in ("people_hr", "hr"):
         for prof in profiles:
             name_lower = prof.name.lower()
-            if any(k in name_lower for k in ("attrition", "left", "exit", "turnover", "status")):
-                if prof.name in df.columns:
-                    col_vals = df[prof.name].dropna().astype(str).str.lower()
-                    exit_count = int(col_vals.isin(["yes", "true", "1", "left", "terminated", "resigned", "exit"]).sum())
-                    if exit_count > 0 and len(col_vals) > 0:
-                        attrition_rate = (exit_count / len(col_vals)) * 100.0
-                        if attrition_rate >= 12.0:
-                            severity = "high" if attrition_rate >= 25.0 else "medium"
-                            risks.append(
-                                RiskItemSchema(
-                                    risk_id="hr_attrition_risk",
-                                    title="Elevated Employee Attrition",
-                                    category="Human Resources",
-                                    label="Requires investigation",
-                                    description=f"Observed employee attrition rate of {attrition_rate:.1f}% ({exit_count:,} exits out of {len(col_vals):,} total personnel).",
-                                    severity=severity,
-                                    severity_reason=f"Classified as {severity.upper()} severity because workforce turnover rate exceeds {'25%' if severity == 'high' else '12%'}.",
-                                    affected_metric=prof.name,
-                                    affected_column=prof.name,
-                                    current_value=round(attrition_rate, 1),
-                                    current_value_formatted=f"{attrition_rate:.1f}%",
-                                    previous_value=10.0,
-                                    previous_value_formatted="10.0% benchmark",
-                                    absolute_change=round(attrition_rate - 10.0, 1),
-                                    absolute_change_formatted=f"+{round(attrition_rate - 10.0, 1):.1f}%",
-                                    pct_change=round(attrition_rate, 1),
-                                    unit="%",
-                                    time_period="Full Dataset",
-                                    evidence=f"{exit_count} exits out of {len(col_vals)} personnel records ({attrition_rate:.1f}%).",
-                                    confidence=0.92,
-                                    qualification="Calculated directly from employee status records.",
-                                    recommended_action="Conduct departmental retention reviews and exit interviews to address turnover factors.",
-                                    risk_type="workforce_attrition",
-                                )
+            if any(k in name_lower for k in ("attrition", "left", "exit", "turnover", "status")) and prof.name in df.columns:
+                col_vals = df[prof.name].dropna().astype(str).str.lower()
+                exit_count = int(col_vals.isin(["yes", "true", "1", "left", "terminated", "resigned", "exit"]).sum())
+                if exit_count > 0 and len(col_vals) > 0:
+                    attrition_rate = (exit_count / len(col_vals)) * 100.0
+                    if attrition_rate >= 12.0:
+                        severity = "high" if attrition_rate >= 25.0 else "medium"
+                        risks.append(
+                            RiskItemSchema(
+                                risk_id="hr_attrition_risk",
+                                title="Elevated workforce turnover rate",
+                                category="Operational Risk",
+                                label="Turnover observation",
+                                description=f"Observed an employee turnover rate of {attrition_rate:.1f}% ({exit_count:,} exits out of {len(col_vals):,} total personnel).",
+                                severity=severity,
+                                severity_reason=f"Turnover rate of {attrition_rate:.1f}% exceeds typical reference thresholds.",
+                                affected_metric=prof.name,
+                                affected_column=prof.name,
+                                current_value=round(attrition_rate, 1),
+                                current_value_formatted=f"{attrition_rate:.1f}%",
+                                previous_value=10.0,
+                                previous_value_formatted="10.0% benchmark",
+                                absolute_change=round(attrition_rate - 10.0, 1),
+                                absolute_change_formatted=f"+{round(attrition_rate - 10.0, 1):.1f}%",
+                                pct_change=round(attrition_rate, 1),
+                                unit="%",
+                                time_period="Full Dataset",
+                                evidence=f"{exit_count:,} exits recorded out of {len(col_vals):,} total personnel.",
+                                why_it_matters="High turnover increases hiring and onboarding costs and may affect team productivity.",
+                                confidence=0.92,
+                                qualification="Calculated directly from employee status records.",
+                                recommended_action="Review exit patterns and retention feedback across departments.",
+                                risk_type="workforce_attrition",
                             )
-                            seen_risk_keys.add("hr_attrition_risk")
-
-    # 3e. Domain-Specific: Sports Performance
-    if domain.domain_id in ("sports", "sports_performance", "sports_cricket"):
-        for prof in profiles:
-            name_lower = prof.name.lower()
-            if any(k in name_lower for k in ("win", "winner", "result", "outcome")) and prof.name in df.columns:
-                try:
-                    s = df[prof.name].dropna().astype(str)
-                    if len(s) >= 10:
-                        counts = s.value_counts()
-                        if len(counts) >= 2:
-                            lowest_rate = (counts.min() / len(s)) * 100.0
-                            if lowest_rate < 25.0:
-                                lowest_name = counts.idxmin()
-                                risks.append(
-                                    RiskItemSchema(
-                                        risk_id="sports_win_rate_deficit",
-                                        title=f"Performance Deficit for '{lowest_name}'",
-                                        category="Sports Performance",
-                                        label="Requires investigation",
-                                        description=f"Entity '{lowest_name}' recorded a low success rate of {lowest_rate:.1f}% ({counts.min()} outcomes out of {len(s)} matches).",
-                                        severity="medium",
-                                        severity_reason="Classified as Medium severity due to significant outcome win-rate divergence.",
-                                        affected_metric=prof.name,
-                                        affected_column=prof.name,
-                                        current_value=round(lowest_rate, 1),
-                                        current_value_formatted=f"{lowest_rate:.1f}%",
-                                        previous_value=50.0,
-                                        previous_value_formatted="50.0% parity",
-                                        absolute_change=round(lowest_rate - 50.0, 1),
-                                        absolute_change_formatted=f"{round(lowest_rate - 50.0, 1):.1f}%",
-                                        pct_change=round(lowest_rate, 1),
-                                        unit="%",
-                                        time_period="Full Match History",
-                                        evidence=f"Win/outcome count is {counts.min()} out of {len(s)} entries ({lowest_rate:.1f}%).",
-                                        confidence=0.90,
-                                        qualification="Derived from historical match result outcomes.",
-                                        recommended_action="Analyze tactical factors, opposition matchups, and venue conditions.",
-                                        risk_type="sports_deficit",
-                                    )
-                                )
-                                seen_risk_keys.add("sports_win_rate_deficit")
-                except Exception:
-                    pass
+                        )
+                        seen_risk_keys.add("hr_attrition_risk")
 
     # -------------------------------------------------------------------------
-    # 4. OVERVIEW SYNTHESIS & PRIORITIZATION
+    # 4. OVERVIEW SYNTHESIS & REALISTIC HEALTH STATUS
     # -------------------------------------------------------------------------
+    # Sort risks: high severity first, then medium, then low, then absolute pct change
     severity_order = {"high": 3, "medium": 2, "low": 1}
     risks.sort(
         key=lambda r: (
@@ -793,29 +805,28 @@ def compute_full_risk_intelligence(
     low_count = sum(1 for r in risks if r.severity == "low")
     total_risks = len(risks)
 
-    if high_count > 0:
+    # Realistic, non-alarmist health status
+    if high_count >= 2:
         health_status = "Critical Risks Identified"
         summary_stmt = (
-            f"Detected {total_risks} potential risk signals ({high_count} High, {medium_count} Medium, {low_count} Low). "
-            f"Primary attention required for {risks[0].title}."
+            f"Identified {total_risks} findings ({high_count} high priority, {medium_count} moderate, {low_count} informational). "
+            f"Primary focus recommended for '{risks[0].title}'."
         )
-    elif medium_count > 0:
+    elif high_count == 1 or medium_count > 0:
         health_status = "Attention Required"
         summary_stmt = (
-            f"Identified {total_risks} moderate risk signals ({medium_count} Medium, {low_count} Low). "
-            "Data demonstrates reasonable stability with isolated variances."
+            f"Identified {total_risks} finding{'' if total_risks == 1 else 's'} ({high_count} high, {medium_count} moderate, {low_count} informational). "
+            "Data demonstrates general operational consistency with isolated areas for review."
         )
     elif low_count > 0:
         health_status = "Healthy"
         summary_stmt = (
-            f"Identified {low_count} minor informational signals. No critical statistical anomalies detected."
+            f"Identified {low_count} informational distribution observation{'' if low_count == 1 else 's'}. "
+            "No critical risks or severe performance drops were detected."
         )
     else:
         health_status = "Healthy"
-        summary_stmt = (
-            "No significant statistical anomalies, severe concentrations, or critical performance drops "
-            "were detected across the analyzed data distributions and time periods."
-        )
+        summary_stmt = "No significant risks detected in the available data."
 
     categories = sorted(list({r.category for r in risks if r.category}))
     affected_metrics = sorted(list({r.affected_metric for r in risks if r.affected_metric}))

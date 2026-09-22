@@ -175,6 +175,11 @@ def format_column_label(column_name: Optional[str]) -> str:
     return f"{_clean_segment(raw_clean)}"
 
 
+# Alias for backwards compatibility
+humanize_column_name = format_column_label
+
+
+
 def _prettify_word(text: str) -> str:
     """Clean and title case a single token or short segment."""
     spaced = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", " ", text)

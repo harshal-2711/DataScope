@@ -108,6 +108,7 @@ export interface RiskItem {
   unit?: string | null
   time_period?: string | null
   evidence: string
+  why_it_matters?: string | null
   confidence?: number
   qualification?: string | null
   recommended_action: string

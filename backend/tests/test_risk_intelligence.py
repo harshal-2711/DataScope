@@ -1,4 +1,4 @@
-﻿"""Comprehensive unit tests for universal domain-aware Risk Intelligence engine."""
+"""Comprehensive unit tests for universal domain-aware Risk Intelligence engine."""
 import unittest
 import numpy as np
 import pandas as pd
@@ -138,7 +138,54 @@ class TestRiskIntelligenceEngine(unittest.TestCase):
         res = compute_full_risk_intelligence(df, "test_clean", profiles, domain)
         self.assertEqual(res.overview.high_count, 0)
         self.assertEqual(res.overview.health_status, "Healthy")
-        self.assertIn("No significant statistical anomalies", res.overview.summary_statement)
+        self.assertIn("No significant risks detected in the available data.", res.overview.summary_statement)
+
+    def test_non_summable_metric_rejected_from_concentration(self):
+        """Verify non-summable metrics like Aging days are NOT summed for concentration risks."""
+        # 100 records with Aging days and customer_login_type
+        df = pd.DataFrame({
+            "Customer_Login_type": ["Member"] * 95 + ["Guest"] * 5,
+            "Aging": [30.0] * 95 + [10.0] * 5,
+            "Rating": [4.8] * 95 + [3.2] * 5,
+        })
+        profiles = profile_dataset(df)
+        domain = DomainIdentitySchema(domain_id="general", name="General", description="")
+
+        res = compute_full_risk_intelligence(df, "test_aging", profiles, domain)
+        # Verify NO risk sums 'Aging' or 'Rating' as high concentration
+        aging_risks = [r for r in res.risks if "aging" in (r.affected_metric or "").lower() and r.category != "Data Quality Issue"]
+        self.assertEqual(len(aging_risks), 0)
+
+        # Login type concentration should be classified strictly as Distribution Observation (low severity)
+        login_risks = [r for r in res.risks if "login" in (r.affected_column or "").lower()]
+        for lr in login_risks:
+            self.assertEqual(lr.category, "Distribution Observation")
+            self.assertEqual(lr.severity, "low")
+            self.assertNotEqual(lr.severity, "high")
+
+    def test_all_risks_have_why_it_matters_and_human_readable_fields(self):
+        """Verify every detected risk item includes why_it_matters and clean titles."""
+        df = pd.DataFrame({
+            "order_date": pd.date_range("2024-01-01", periods=10, freq="D"),
+            "revenue": [1000.0, 950.0, 900.0, 850.0, 800.0, 750.0, 700.0, 600.0, 500.0, 400.0],
+            "customer_name": ["Acme Corp"] * 9 + ["Other"] * 1,
+            "cost": [100.0, 150.0, 200.0, 250.0, 300.0, 400.0, 500.0, 600.0, 800.0, 1200.0],
+        })
+        profiles = profile_dataset(df)
+        domain = DomainIdentitySchema(domain_id="ecommerce", name="E-Commerce", description="")
+        res = compute_full_risk_intelligence(df, "test_full_fields", profiles, domain)
+
+        self.assertGreater(len(res.risks), 0)
+        for r in res.risks:
+            self.assertIsNotNone(r.why_it_matters)
+            self.assertGreater(len(r.why_it_matters), 10)
+            self.assertIsNotNone(r.recommended_action)
+            self.assertGreater(len(r.recommended_action), 10)
+            self.assertIn(r.category, [
+                "Performance Decline", "Revenue/Profit Risk", "Cost Increase",
+                "Data Quality Issue", "Unusual Outlier", "High Volatility",
+                "Operational Risk", "Distribution Observation",
+            ])
 
     def test_risk_service_integration(self):
         """Test dataset_service.get_risk_intelligence integration."""
@@ -165,3 +212,4 @@ class TestRiskIntelligenceEngine(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
