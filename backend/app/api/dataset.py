@@ -1,4 +1,7 @@
+from __future__ import annotations
+
 import json
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 from fastapi import APIRouter, File, HTTPException, Query, UploadFile
 
@@ -64,15 +67,15 @@ def get_dataset_recommendations(dataset_id: str) -> dict:
 )
 def get_dataset_drilldown(
     dataset_id: str,
-    dimension: str = Query(
+    dimension: Optional[str] = Query(
         None, description="Raw column name to filter by, e.g. 'Product'. "
         "Used for a single-level drill-down; ignored if `filters` is provided."
     ),
-    value: str = Query(
+    value: Optional[str] = Query(
         None, description="The selected value within that column, e.g. 'T-Shirts'. "
         "Used for a single-level drill-down; ignored if `filters` is provided."
     ),
-    filters: str = Query(
+    filters: Optional[str] = Query(
         None,
         description=(
             "JSON-encoded list of {\"dimension\": ..., \"value\": ...} objects, "
@@ -166,8 +169,8 @@ def get_dataset_decision_dashboard(dataset_id: str) -> dict:
 def get_dataset_trends(
     dataset_id: str,
     granularity: str = Query("auto", description="Time granularity: 'auto', 'D', 'W', 'M', 'Q', or 'Y'"),
-    metric: str = Query(None, description="Continuous numeric metric to aggregate over time"),
-    category_col: str = Query(None, description="Categorical dimension for segment breakdown over time"),
+    metric: Optional[str] = Query(None, description="Continuous numeric metric to aggregate over time"),
+    category_col: Optional[str] = Query(None, description="Categorical dimension for segment breakdown over time"),
 ) -> dict:
     """Return comprehensive time-series trends intelligence, period comparisons, volatility, and spikes."""
     try:
