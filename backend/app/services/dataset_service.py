@@ -55,7 +55,7 @@ from app.services.file_parser import FileDiagnostics, parse_tabular_file
 from app.services.forecast_engine import compute_forecast
 from app.services.grain_engine import detect_dataset_grain
 from app.services.trend_engine import compute_trends, compute_trends_intelligence
-from app.services.type_inference import infer_dataset_types
+from app.services.type_inference import detect_dataset_currency, infer_dataset_types
 from app.services.universal_stats import compute_universal_statistics
 
 
