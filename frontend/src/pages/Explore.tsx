@@ -37,6 +37,28 @@ export default function Explore() {
             </Button>
           </div>
         </div>
+      ) : intelState.status === "loading" ? (
+        <div className="flex h-64 items-center justify-center">
+          <div className="flex items-center gap-2 text-sm text-muted-foreground">
+            <span className="h-4 w-4 animate-spin rounded-full border-2 border-primary border-t-transparent" />
+            Computing domain intelligence, business entities, and decision dashboards...
+          </div>
+        </div>
+      ) : intelState.status === "error" ? (
+        <div className="rounded-xl border border-rose-500/20 bg-rose-500/5 p-6 text-center space-y-3">
+          <h3 className="text-base font-semibold text-foreground">Dataset Session Expired or Not Found</h3>
+          <p className="max-w-md mx-auto text-xs text-rose-600 dark:text-rose-400">
+            {intelState.message}
+          </p>
+          <div className="flex justify-center gap-3 pt-2">
+            <Button size="sm" variant="outline" onClick={() => window.location.reload()}>
+              Retry
+            </Button>
+            <Button asChild size="sm">
+              <Link to="/dataset">Upload Dataset</Link>
+            </Button>
+          </div>
+        </div>
       ) : (
         <div className="space-y-6">
           {intelState.status === "success" && (
