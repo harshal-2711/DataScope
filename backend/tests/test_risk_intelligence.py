@@ -218,7 +218,52 @@ class TestRiskIntelligenceEngine(unittest.TestCase):
         self.assertIsInstance(risk_data["risks"], list)
         self.assertGreater(len(risk_data["risks"]), 0)
 
+    def test_profit_and_revenue_decline_severity_classification(self):
+        """Verify that 12.8% profit decline and 12.6% revenue decline are classified as Medium severity,
+        not generic informational observations, and cross-metric margin contraction is explained."""
+        dates = pd.date_range("2024-01-01", periods=12, freq="ME")
+        sales = [100000.0] * 11 + [87400.0]  # -12.6%
+        profit = [20000.0] * 11 + [17440.0]  # -12.8%
+
+        df = pd.DataFrame({
+            "order_date": dates,
+            "Sales": sales,
+            "Profit": profit,
+            "order_id": [f"ORD-{i}" for i in range(12)],
+        })
+
+        profiles = profile_dataset(df)
+        domain = DomainIdentitySchema(domain_id="ecommerce", name="E-Commerce", description="")
+        res = compute_full_risk_intelligence(df, "test_declines", profiles, domain, dataset_currency="$")
+
+        # Verify both declines are detected
+        self.assertEqual(len(res.risks), 2)
+        self.assertEqual(res.overview.medium_count, 2)
+        self.assertEqual(res.overview.low_count, 0)
+        self.assertEqual(res.overview.health_status, "Attention Required")
+
+        profit_risk = next(r for r in res.risks if "profit" in r.affected_metric.lower())
+        sales_risk = next(r for r in res.risks if "sales" in r.affected_metric.lower())
+
+        self.assertEqual(profit_risk.severity, "medium")
+        self.assertEqual(sales_risk.severity, "medium")
+        self.assertEqual(profit_risk.label, "Profit decline")
+        self.assertEqual(sales_risk.label, "Revenue decline")
+        self.assertEqual(profit_risk.category, "Revenue/Profit Risk")
+        self.assertEqual(sales_risk.category, "Revenue/Profit Risk")
+
+        # Verify evidence-based numbers
+        self.assertAlmostEqual(profit_risk.pct_change, -12.8, places=1)
+        self.assertAlmostEqual(sales_risk.pct_change, -12.6, places=1)
+        self.assertIn("Previous period: $20,000", profit_risk.evidence)
+        self.assertIn("Previous period: $100,000", sales_risk.evidence)
+
+        # Verify cross-metric margin note
+        self.assertIn("concurrent", sales_risk.why_it_matters.lower())
+        self.assertIn("margins", profit_risk.why_it_matters.lower())
+
 
 if __name__ == "__main__":
     unittest.main()
+
 

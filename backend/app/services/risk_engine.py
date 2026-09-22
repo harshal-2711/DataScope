@@ -346,29 +346,46 @@ def compute_full_risk_intelligence(
                 span_days = (df_time["_dt_parsed"].max() - df_time["_dt_parsed"].min()).days
                 freq_code = "ME" if span_days > 60 else "D"
                 freq_label = "Monthly" if freq_code == "ME" else "Daily"
-
                 numeric_cols = [
                     p.name for p in profiles
                     if p.role == "numeric" and p.name in df_time.columns and p.name != date_col and not _is_non_summable_metric(p.name)
                 ]
 
-                for met in numeric_cols[:5]:
+                # Pre-compute metric series across numeric columns for cross-metric correlation
+                metric_series_map: Dict[str, pd.Series] = {}
+                for met in numeric_cols[:8]:
                     s_clean = pd.to_numeric(df_time[met], errors="coerce")
                     if s_clean.notna().sum() < 6:
                         continue
-
                     try:
-                        grouped = df_time.set_index("_dt_parsed").resample(freq_code)[met].sum().dropna()
+                        grp = df_time.set_index("_dt_parsed").resample(freq_code)[met].sum().dropna()
                     except Exception:
                         try:
-                            grouped = df_time.groupby(df_time["_dt_parsed"].dt.to_period("M" if span_days > 60 else "D"))[met].sum()
-                            grouped.index = grouped.index.astype(str)
+                            grp = df_time.groupby(df_time["_dt_parsed"].dt.to_period("M" if span_days > 60 else "D"))[met].sum()
+                            grp.index = grp.index.astype(str)
                         except Exception:
                             continue
+                    if len(grp) >= 3:
+                        metric_series_map[met] = grp
 
-                    if len(grouped) < 3:
-                        continue
+                # Check if both Revenue and Profit decline concurrently
+                rev_col = next((m for m in metric_series_map if any(k in m.lower() for k in ("sales", "revenue", "gross_sales", "income"))), None)
+                prof_col = next((m for m in metric_series_map if "profit" in m.lower() and m != rev_col), None)
+                both_financial_declining = False
+                margin_contracting = False
 
+                if rev_col and prof_col:
+                    r_vals = metric_series_map[rev_col].values.astype(float)
+                    p_vals = metric_series_map[prof_col].values.astype(float)
+                    if len(r_vals) >= 2 and len(p_vals) >= 2 and abs(r_vals[-2]) > 1e-6 and abs(p_vals[-2]) > 1e-6:
+                        r_pct = ((r_vals[-1] - r_vals[-2]) / abs(r_vals[-2])) * 100.0
+                        p_pct = ((p_vals[-1] - p_vals[-2]) / abs(p_vals[-2])) * 100.0
+                        if r_pct <= -5.0 and p_pct <= -5.0:
+                            both_financial_declining = True
+                            if p_pct < r_pct:
+                                margin_contracting = True
+
+                for met, grouped in metric_series_map.items():
                     vals = grouped.values.astype(float)
                     periods = [str(idx)[:10] for idx in grouped.index]
                     n_periods = len(vals)
@@ -377,6 +394,15 @@ def compute_full_risk_intelligence(
                     prev_val = float(vals[-2])
                     abs_change = curr_val - prev_val
                     pct_change = ((abs_change / abs(prev_val)) * 100.0) if abs(prev_val) > 1e-6 else 0.0
+                    abs_pct = abs(pct_change)
+
+                    # Statistical baseline over prior periods
+                    hist_vals = vals[:-1] if n_periods >= 4 else vals
+                    mean_hist = float(np.mean(hist_vals))
+                    std_hist = float(np.std(hist_vals)) if len(hist_vals) >= 3 else 0.0
+                    is_below_2sigma = bool(std_hist > 1e-6 and curr_val < (mean_hist - 2.0 * std_hist))
+                    is_below_1sigma = bool(std_hist > 1e-6 and curr_val < (mean_hist - 1.0 * std_hist))
+                    is_sustained = (n_periods >= 3 and vals[-1] < vals[-2] < vals[-3])
 
                     preview_points = [
                         {"period": periods[i], "value": round(float(vals[i]), 2)}
@@ -390,37 +416,85 @@ def compute_full_risk_intelligence(
 
                     is_neg_metric = _is_negative_polarity(met)
                     is_pos_metric = _is_positive_polarity(met)
+                    is_financial = any(k in met.lower() for k in ("sales", "revenue", "profit", "income", "margin", "gmv"))
 
                     # 2a. Performance / Revenue / Profit Decline
                     if (is_pos_metric or not is_neg_metric) and pct_change <= -5.0:
-                        is_sustained = (
-                            n_periods >= 3 and vals[-1] < vals[-2] < vals[-3]
+                        # Evidence-based severity calibration:
+                        # High: Severe drop (>=25%), or >=15% with sustained trend / below 2-sigma baseline
+                        # Medium: Meaningful drop (>=10%), or >=7.5% sustained / below 1-sigma baseline
+                        # Low: Minor isolated drop (5% - 10%)
+                        is_high = (
+                            abs_pct >= 25.0
+                            or (abs_pct >= 15.0 and is_sustained)
+                            or (abs_pct >= 18.0 and is_below_2sigma)
+                            or (is_financial and abs_pct >= 20.0 and (is_sustained or is_below_1sigma))
                         )
-                        is_high = pct_change <= -30.0 or (pct_change <= -20.0 and is_sustained)
-                        is_med = pct_change <= -15.0 or is_sustained
+                        is_med = (
+                            abs_pct >= 10.0
+                            or (abs_pct >= 7.5 and is_sustained)
+                            or (abs_pct >= 8.0 and is_below_1sigma)
+                            or (is_financial and abs_pct >= 10.0)
+                        )
                         severity = "high" if is_high else ("medium" if is_med else "low")
 
-                        # Assign clean category
-                        if any(k in met.lower() for k in ("sales", "revenue", "profit", "income", "margin")):
+                        # Meaningful labels and categories
+                        if "profit" in met.lower():
                             category = "Revenue/Profit Risk"
+                            label = "Profit decline" if severity in ("high", "medium") else "Minor profit drop"
+                        elif any(k in met.lower() for k in ("sales", "revenue", "gmv", "income")):
+                            category = "Revenue/Profit Risk"
+                            label = "Revenue decline" if severity in ("high", "medium") else "Minor revenue drop"
                         else:
                             category = "Performance Decline"
+                            label = "Performance decline" if severity in ("high", "medium") else "Minor variation"
 
                         title = f"{human_met} decreased compared with the previous period"
-                        sustained_note = " with a sustained downward trend over consecutive periods" if is_sustained else ""
+                        sustained_note = " with a sustained downward trend across consecutive periods" if is_sustained else ""
+
+                        # Contextual why_it_matters explanation
+                        if both_financial_declining and is_financial:
+                            if margin_contracting and "profit" in met.lower():
+                                why_note = (
+                                    f"Both revenue and profit contracted simultaneously in this period, with profit declining at a steeper rate ({pct_change:+.1f}%), "
+                                    f"reflecting compressed operational margins."
+                                )
+                            else:
+                                why_note = (
+                                    f"Both revenue and profit experienced concurrent decreases in this period, signaling combined top-line contraction. "
+                                    f"Continued declines in '{human_met}' directly reduce available operating funds."
+                                )
+                        elif "profit" in met.lower():
+                            why_note = (
+                                f"A {abs_pct:.1f}% decline in '{human_met}' directly compresses net operating margins. "
+                                "Persistent profit erosion may require structural cost adjustments."
+                            )
+                        elif any(k in met.lower() for k in ("sales", "revenue")):
+                            why_note = (
+                                f"Top-line reduction in '{human_met}' reduces gross volume and cash flow. "
+                                "Investigating sales channels and client segments is recommended to stabilize performance."
+                            )
+                        else:
+                            why_note = f"Continued declines in '{human_met}' may impact overall operational throughput and performance goals."
+
+                        severity_justification = (
+                            f"Period-over-period decline of {abs_pct:.1f}% ({prev_fmt} -> {curr_fmt})"
+                            f"{' persisting across multiple consecutive periods' if is_sustained else ''}"
+                            f"{' dropping significantly below historical baseline' if is_below_1sigma else ''}."
+                        )
 
                         risks.append(
                             RiskItemSchema(
                                 risk_id=f"trend_decline_{met}",
                                 title=title,
                                 category=category,
-                                label="Noticeable decline" if severity in ("high", "medium") else "Minor decline",
+                                label=label,
                                 description=(
                                     f"'{human_met}' decreased by {abs(pct_change):.1f}% from {prev_fmt} ({periods[-2]}) "
                                     f"to {curr_fmt} ({periods[-1]}){sustained_note}."
                                 ),
                                 severity=severity,
-                                severity_reason=f"Period-over-period decline of {abs(pct_change):.1f}%{' persisting across multiple periods' if is_sustained else ''}.",
+                                severity_reason=severity_justification,
                                 affected_metric=met,
                                 affected_column=met,
                                 current_value=curr_val,
@@ -432,11 +506,11 @@ def compute_full_risk_intelligence(
                                 pct_change=round(pct_change, 1),
                                 unit=unit_lbl or "units",
                                 time_period=f"{periods[-2]} to {periods[-1]} ({freq_label})",
-                                evidence=f"Previous period: {prev_fmt} → Current period: {curr_fmt} ({pct_change:+.1f}%).",
-                                why_it_matters=f"Continued declines in '{human_met}' may impact overall performance and strategic goals.",
+                                evidence=f"Previous period: {prev_fmt} -> Current period: {curr_fmt} ({pct_change:+.1f}%).",
+                                why_it_matters=why_note,
                                 confidence=0.94,
                                 qualification="Calculated directly from chronological period aggregation.",
-                                recommended_action=f"Investigate the underlying segments or categories contributing to the decline in '{human_met}'.",
+                                recommended_action=f"Investigate the underlying product categories, client segments, or regions contributing to the decline in '{human_met}'.",
                                 risk_type="performance_decline",
                                 time_series_preview=preview_points,
                             )
@@ -444,12 +518,9 @@ def compute_full_risk_intelligence(
                         seen_risk_keys.add(f"trend_decline_{met}")
 
                     # 2b. Cost / Delay / Expense Increase
-                    elif is_neg_metric and pct_change >= 10.0:
-                        is_sustained = (
-                            n_periods >= 3 and vals[-1] > vals[-2] > vals[-3]
-                        )
-                        is_high = pct_change >= 30.0 or (pct_change >= 20.0 and is_sustained)
-                        is_med = pct_change >= 15.0 or is_sustained
+                    elif is_neg_metric and pct_change >= 5.0:
+                        is_high = pct_change >= 25.0 or (pct_change >= 15.0 and is_sustained)
+                        is_med = pct_change >= 10.0 or (pct_change >= 7.5 and is_sustained)
                         severity = "high" if is_high else ("medium" if is_med else "low")
 
                         category = "Cost Increase" if any(k in met.lower() for k in ("cost", "expense", "spend")) else "Operational Risk"
@@ -460,7 +531,7 @@ def compute_full_risk_intelligence(
                                 risk_id=f"trend_escalation_{met}",
                                 title=title,
                                 category=category,
-                                label="Noticeable increase" if severity in ("high", "medium") else "Moderate increase",
+                                label="Cost surge" if severity in ("high", "medium") else "Minor cost rise",
                                 description=(
                                     f"'{human_met}' rose by {pct_change:.1f}% from {prev_fmt} ({periods[-2]}) "
                                     f"to {curr_fmt} ({periods[-1]})."
@@ -478,7 +549,7 @@ def compute_full_risk_intelligence(
                                 pct_change=round(pct_change, 1),
                                 unit=unit_lbl or "units",
                                 time_period=f"{periods[-2]} to {periods[-1]} ({freq_label})",
-                                evidence=f"Previous period: {prev_fmt} → Current period: {curr_fmt} ({pct_change:+.1f}%).",
+                                evidence=f"Previous period: {prev_fmt} -> Current period: {curr_fmt} ({pct_change:+.1f}%).",
                                 why_it_matters=f"Unchecked growth in '{human_met}' can compress operating margins and reduce operational efficiency.",
                                 confidence=0.93,
                                 qualification="Calculated from chronological period aggregation.",
