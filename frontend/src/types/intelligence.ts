@@ -691,6 +691,7 @@ export interface CompetitionTimeComparison {
 export interface CompetitionOverview {
   comparison_dimension: string
   comparison_dimension_label: string
+  entity_type_label: string
   available_dimensions: string[]
   primary_metric: string
   primary_metric_label: string
@@ -714,18 +715,26 @@ export interface CompetitionOverview {
 export interface CompetitionIntelligenceResponse {
   dataset_id: string
   is_available: boolean
+  competition_mode: "internal_benchmarking" | "unavailable"
+  mode_label: string
+  entity_type?: string | null
   unavailable_reason?: string | null
+  summary_statement?: string | null
   missing_requirements: string[]
+  required_data_guide: string[]
   domain_id?: string | null
   domain_name?: string | null
   currency_symbol?: string | null
   overview?: CompetitionOverview | null
   segments: CompetitionSegment[]
   gaps: CompetitionGap[]
+  areas_of_strength: string[]
+  areas_for_improvement: string[]
   time_comparison?: CompetitionTimeComparison | null
   data_limitations: string[]
   methodology_notes: string[]
   analyzed_at?: string | null
 }
+
 
 

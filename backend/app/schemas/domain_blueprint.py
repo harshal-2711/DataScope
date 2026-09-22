@@ -554,6 +554,7 @@ class CompetitionTimeComparisonSchema(BaseModel):
 class CompetitionOverviewSchema(BaseModel):
     comparison_dimension: str
     comparison_dimension_label: str
+    entity_type_label: str = "Entity"
     available_dimensions: List[str] = Field(default_factory=list)
     primary_metric: str
     primary_metric_label: str
@@ -577,16 +578,24 @@ class CompetitionOverviewSchema(BaseModel):
 class CompetitionIntelligenceResponse(BaseModel):
     dataset_id: str
     is_available: bool = True
+    competition_mode: Literal["internal_benchmarking", "unavailable"] = "unavailable"
+    mode_label: str = "Dataset-Based Benchmarking"
+    entity_type: Optional[str] = None
     unavailable_reason: Optional[str] = None
+    summary_statement: Optional[str] = None
     missing_requirements: List[str] = Field(default_factory=list)
+    required_data_guide: List[str] = Field(default_factory=list)
     domain_id: Optional[str] = None
     domain_name: Optional[str] = None
     currency_symbol: Optional[str] = None
     overview: Optional[CompetitionOverviewSchema] = None
     segments: List[CompetitionSegmentSchema] = Field(default_factory=list)
     gaps: List[CompetitionGapSchema] = Field(default_factory=list)
+    areas_of_strength: List[str] = Field(default_factory=list)
+    areas_for_improvement: List[str] = Field(default_factory=list)
     time_comparison: Optional[CompetitionTimeComparisonSchema] = None
     data_limitations: List[str] = Field(default_factory=list)
     methodology_notes: List[str] = Field(default_factory=list)
     analyzed_at: Optional[str] = None
+
 
