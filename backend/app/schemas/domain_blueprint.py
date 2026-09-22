@@ -513,3 +513,80 @@ class DataQualityReportResponse(BaseModel):
     column_diagnostics: Dict[str, ColumnQualityDiagnosticSchema] = Field(default_factory=dict)
     recommendations: List[str] = Field(default_factory=list)
 
+
+class CompetitionSegmentSchema(BaseModel):
+    rank: int
+    name: str
+    value: float
+    formatted_value: str
+    share_pct: Optional[float] = None
+    record_count: int = 0
+    growth_rate_pct: Optional[float] = None
+    status: Literal["top", "above_average", "average", "below_average", "bottom"] = "average"
+
+
+class CompetitionGapSchema(BaseModel):
+    title: str
+    gap_type: Literal["top_vs_bottom", "top_vs_average", "leader_dominance", "growth_disparity"]
+    segment_a: str
+    segment_b: str
+    absolute_gap: float
+    formatted_absolute_gap: str
+    ratio: float
+    pct_difference: float
+    explanation: str
+    evidence: str
+
+
+class CompetitionTimeComparisonSchema(BaseModel):
+    is_available: bool = False
+    time_column: Optional[str] = None
+    granularity: Optional[str] = None
+    period_labels: List[str] = Field(default_factory=list)
+    segment_series: List[Dict[str, Any]] = Field(default_factory=list)
+    fastest_growing: Optional[str] = None
+    fastest_growing_rate: Optional[float] = None
+    most_declining: Optional[str] = None
+    most_declining_rate: Optional[float] = None
+    summary: Optional[str] = None
+
+
+class CompetitionOverviewSchema(BaseModel):
+    comparison_dimension: str
+    comparison_dimension_label: str
+    available_dimensions: List[str] = Field(default_factory=list)
+    primary_metric: str
+    primary_metric_label: str
+    available_metrics: List[str] = Field(default_factory=list)
+    aggregation_method: Literal["sum", "mean", "count"] = "sum"
+    total_segments: int
+    top_segment_name: str
+    top_segment_value: float
+    top_segment_formatted: str
+    bottom_segment_name: str
+    bottom_segment_value: float
+    bottom_segment_formatted: str
+    benchmark_average: float
+    benchmark_average_formatted: str
+    benchmark_median: float
+    benchmark_median_formatted: str
+    performance_spread_ratio: float
+    summary_statement: str
+
+
+class CompetitionIntelligenceResponse(BaseModel):
+    dataset_id: str
+    is_available: bool = True
+    unavailable_reason: Optional[str] = None
+    missing_requirements: List[str] = Field(default_factory=list)
+    domain_id: Optional[str] = None
+    domain_name: Optional[str] = None
+    currency_symbol: Optional[str] = None
+    overview: Optional[CompetitionOverviewSchema] = None
+    segments: List[CompetitionSegmentSchema] = Field(default_factory=list)
+    gaps: List[CompetitionGapSchema] = Field(default_factory=list)
+    time_comparison: Optional[CompetitionTimeComparisonSchema] = None
+    data_limitations: List[str] = Field(default_factory=list)
+    methodology_notes: List[str] = Field(default_factory=list)
+    analyzed_at: Optional[str] = None
+

@@ -1,22 +1,60 @@
+import { useEffect, useState } from "react"
 import { Link } from "react-router-dom"
-import { Target, Trophy, Info } from "lucide-react"
+import { Target, Loader2, RefreshCw, Upload } from "lucide-react"
 import { PageHeader } from "@/components/shared/PageHeader"
 import { EmptyState } from "@/components/shared/EmptyState"
 import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { CompetitionViewer } from "@/components/intelligence/CompetitionViewer"
 import { DomainHeader } from "@/components/intelligence/DomainHeader"
 import { useActiveDataset } from "@/context/DatasetContext"
 import { useDomainIntelligence } from "@/hooks/useDomainIntelligence"
+import { fetchCompetitionIntelligence } from "@/lib/datasetApi"
+import type { CompetitionIntelligenceResponse } from "@/types/intelligence"
 
 export default function Competition() {
-  const { activeDataset } = useActiveDataset()
+  const { activeDataset, removeDataset } = useActiveDataset()
   const intelState = useDomainIntelligence(activeDataset?.dataset_id ?? null)
+
+  const [compData, setCompData] = useState<CompetitionIntelligenceResponse | null>(null)
+  const [isLoading, setIsLoading] = useState<boolean>(false)
+  const [errorMsg, setErrorMsg] = useState<string | null>(null)
+
+  const loadData = () => {
+    if (!activeDataset?.dataset_id) {
+      setCompData(null)
+      return
+    }
+
+    setIsLoading(true)
+    setErrorMsg(null)
+
+    fetchCompetitionIntelligence(activeDataset.dataset_id)
+      .then((res) => {
+        setCompData(res)
+        setIsLoading(false)
+      })
+      .catch((err) => {
+        setErrorMsg(err?.message || "Failed to load competition intelligence.")
+        setIsLoading(false)
+      })
+  }
+
+  useEffect(() => {
+    loadData()
+  }, [activeDataset?.dataset_id])
+
+  const intelErrorMsg = intelState.status === "error" ? intelState.message : ""
+  const isSessionExpired =
+    errorMsg?.toLowerCase().includes("not found") ||
+    errorMsg?.toLowerCase().includes("expired") ||
+    intelErrorMsg.toLowerCase().includes("not found") ||
+    intelErrorMsg.toLowerCase().includes("expired")
 
   return (
     <div className="space-y-6">
       <PageHeader
         title="Competition & Benchmarking"
-        description="Compare your dataset metrics and performance distributions against domain standards and category peers."
+        description="Universal, domain-aware cohort comparisons, segment rankings, performance spreads, and competitive gap analysis calculated strictly from verified dataset evidence."
       />
 
       {!activeDataset ? (
@@ -24,7 +62,7 @@ export default function Competition() {
           <EmptyState
             icon={Target}
             title="No dataset loaded"
-            description="Upload a dataset first to enable competitive benchmark analysis and category comparisons."
+            description="Upload a dataset first to evaluate competitive rankings, performance spreads, and cohort gaps."
           />
           <div className="flex justify-center">
             <Button asChild size="sm">
@@ -32,40 +70,61 @@ export default function Competition() {
             </Button>
           </div>
         </div>
-      ) : (
+      ) : isSessionExpired ? (
+        <div className="space-y-4 rounded-xl border border-amber-500/30 bg-amber-500/10 p-6 text-center">
+          <h3 className="text-lg font-semibold text-foreground">
+            Dataset Session Expired
+          </h3>
+          <p className="text-sm text-muted-foreground max-w-md mx-auto">
+            The backend server restarted or the active dataset in-memory session has expired. Please re-upload your dataset to continue.
+          </p>
+          <div className="flex justify-center gap-3 pt-2">
+            <Button
+              variant="default"
+              size="sm"
+              onClick={() => {
+                removeDataset()
+              }}
+              asChild
+            >
+              <Link to="/dataset">
+                <Upload className="h-4 w-4 mr-2" />
+                Re-upload Dataset
+              </Link>
+            </Button>
+          </div>
+        </div>
+      ) : isLoading ? (
+        <div className="flex flex-col items-center justify-center py-20 space-y-4">
+          <Loader2 className="h-8 w-8 animate-spin text-primary" />
+          <p className="text-sm text-muted-foreground">
+            Evaluating cohort distributions and ranking competitive segments...
+          </p>
+        </div>
+      ) : errorMsg ? (
+        <div className="space-y-4 rounded-xl border border-destructive/30 bg-destructive/10 p-6 text-center">
+          <h3 className="text-lg font-semibold text-foreground">
+            Unable to Load Competition Intelligence
+          </h3>
+          <p className="text-sm text-muted-foreground max-w-md mx-auto">
+            {errorMsg}
+          </p>
+          <div className="flex justify-center gap-3 pt-2">
+            <Button variant="outline" size="sm" onClick={loadData}>
+              <RefreshCw className="h-4 w-4 mr-2" />
+              Retry
+            </Button>
+          </div>
+        </div>
+      ) : compData ? (
         <div className="space-y-6">
           {intelState.status === "success" && (
             <DomainHeader domain={intelState.data.domain} />
           )}
 
-          <Card>
-            <CardHeader className="flex flex-row items-center gap-3">
-              <div className="rounded-lg bg-primary/10 p-2 text-primary">
-                <Trophy className="h-5 w-5" />
-              </div>
-              <div>
-                <CardTitle className="text-base">
-                  Competitive Benchmarks for {activeDataset.filename}
-                </CardTitle>
-                <p className="text-xs text-muted-foreground">
-                  Dataset containing {activeDataset.row_count.toLocaleString()} records across {activeDataset.column_count} columns
-                </p>
-              </div>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <div className="flex items-start gap-3 rounded-lg border border-border bg-muted/40 p-4 text-sm">
-                <Info className="h-5 w-5 shrink-0 text-primary mt-0.5" />
-                <div className="space-y-1">
-                  <p className="font-medium text-foreground">Domain Benchmark Alignment Active</p>
-                  <p className="text-xs text-muted-foreground">
-                    Peer industry quartile metrics and competitive intelligence indexes for this domain are being synchronized with the active dataset.
-                  </p>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
+          <CompetitionViewer data={compData} />
         </div>
-      )}
+      ) : null}
     </div>
   )
 }

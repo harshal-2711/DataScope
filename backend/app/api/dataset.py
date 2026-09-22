@@ -8,6 +8,7 @@ from fastapi import APIRouter, File, HTTPException, Query, UploadFile
 
 from app.schemas.dataset import DatasetSummary, DrilldownResponse, RecommendationsResponse
 from app.schemas.domain_blueprint import (
+    CompetitionIntelligenceResponse,
     DataQualityReportResponse,
     DecisionDashboardResponse,
     DomainIntelligenceResponse,
@@ -245,5 +246,28 @@ def get_dataset_risk_intelligence(dataset_id: str) -> dict:
             len(dataset_store._store),
         )
         raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
+
+
+@router.get(
+    "/dataset/{dataset_id}/competition",
+    response_model=CompetitionIntelligenceResponse,
+)
+def get_dataset_competition_intelligence(dataset_id: str) -> dict:
+    """Return universal, domain-aware competition intelligence and comparative benchmarks."""
+    logger.info("[ROUTE-HIT] GET /api/dataset/%s/competition received", dataset_id)
+    try:
+        res = dataset_service.get_competition_intelligence(dataset_id)
+        logger.info("[ROUTE-SUCCESS] GET /api/dataset/%s/competition completed", dataset_id)
+        return res
+    except DatasetError as exc:
+        logger.warning(
+            "[APPLICATION-404] Dataset '%s' failed in competition endpoint: %s (Status: %d, Store entries: %d)",
+            dataset_id,
+            exc.message,
+            exc.status_code,
+            len(dataset_store._store),
+        )
+        raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
+
 
 

@@ -651,3 +651,81 @@ export interface DataQualityReportResponse {
   recommendations: string[]
 }
 
+export interface CompetitionSegment {
+  rank: number
+  name: string
+  value: number
+  formatted_value: string
+  share_pct?: number | null
+  record_count: number
+  growth_rate_pct?: number | null
+  status: "top" | "above_average" | "average" | "below_average" | "bottom"
+}
+
+export interface CompetitionGap {
+  title: string
+  gap_type: "top_vs_bottom" | "top_vs_average" | "leader_dominance" | "growth_disparity"
+  segment_a: string
+  segment_b: string
+  absolute_gap: number
+  formatted_absolute_gap: string
+  ratio: number
+  pct_difference: number
+  explanation: string
+  evidence: string
+}
+
+export interface CompetitionTimeComparison {
+  is_available: boolean
+  time_column?: string | null
+  granularity?: string | null
+  period_labels: string[]
+  segment_series: Array<{ segment: string; values: number[] }>
+  fastest_growing?: string | null
+  fastest_growing_rate?: number | null
+  most_declining?: string | null
+  most_declining_rate?: number | null
+  summary?: string | null
+}
+
+export interface CompetitionOverview {
+  comparison_dimension: string
+  comparison_dimension_label: string
+  available_dimensions: string[]
+  primary_metric: string
+  primary_metric_label: string
+  available_metrics: string[]
+  aggregation_method: "sum" | "mean" | "count"
+  total_segments: number
+  top_segment_name: string
+  top_segment_value: number
+  top_segment_formatted: string
+  bottom_segment_name: string
+  bottom_segment_value: number
+  bottom_segment_formatted: string
+  benchmark_average: number
+  benchmark_average_formatted: string
+  benchmark_median: number
+  benchmark_median_formatted: string
+  performance_spread_ratio: number
+  summary_statement: string
+}
+
+export interface CompetitionIntelligenceResponse {
+  dataset_id: string
+  is_available: boolean
+  unavailable_reason?: string | null
+  missing_requirements: string[]
+  domain_id?: string | null
+  domain_name?: string | null
+  currency_symbol?: string | null
+  overview?: CompetitionOverview | null
+  segments: CompetitionSegment[]
+  gaps: CompetitionGap[]
+  time_comparison?: CompetitionTimeComparison | null
+  data_limitations: string[]
+  methodology_notes: string[]
+  analyzed_at?: string | null
+}
+
+

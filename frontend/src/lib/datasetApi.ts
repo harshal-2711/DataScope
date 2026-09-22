@@ -262,3 +262,26 @@ export async function fetchRiskIntelligence(
   return data
 }
 
+export async function fetchCompetitionIntelligence(
+  datasetId: string
+): Promise<import("@/types/intelligence").CompetitionIntelligenceResponse> {
+  const cacheKey = `${datasetId}_competition`
+  if (apiCache.has(cacheKey)) {
+    return apiCache.get(cacheKey)
+  }
+
+  const res = await safeFetch(
+    `${API_BASE_URL}/api/dataset/${encodeURIComponent(datasetId)}/competition`,
+    undefined,
+    "competition intelligence"
+  )
+
+  const data = await unwrapOrThrow<import("@/types/intelligence").CompetitionIntelligenceResponse>(
+    res,
+    "Competition intelligence could not be generated for this dataset."
+  )
+  apiCache.set(cacheKey, data)
+  return data
+}
+
+
