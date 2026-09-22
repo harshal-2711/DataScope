@@ -255,6 +255,27 @@ class TestUniversalForecastingEngine(unittest.TestCase):
         self.assertTrue(res_p.is_available)
         self.assertEqual(res_p.unit, "₹")
 
+    def test_automatic_metric_selection_ranking(self):
+        """Verify automatic selection of the most relevant business metric when no metric is specified."""
+        dates = pd.date_range("2024-01-01", periods=15, freq="D")
+        # Dataset with customer age, row index, and sales revenue
+        df = pd.DataFrame({
+            "order_date": dates,
+            "user_age": [25, 30, 22, 40, 35, 28, 45, 33, 29, 31, 38, 42, 27, 36, 32],
+            "sales_amount": [1500.0 + i * 100 for i in range(15)],
+            "discount_rate": [0.1, 0.05, 0.15, 0.1, 0.2, 0.05, 0.1, 0.15, 0.1, 0.05, 0.1, 0.15, 0.1, 0.05, 0.1],
+        })
+
+        # Do NOT pass metric argument — should automatically pick sales_amount
+        res = compute_forecast(df, "auto_metric_ds", horizon=7)
+        self.assertTrue(res.is_available)
+        self.assertEqual(res.metric, "sales_amount")
+        self.assertEqual(res.metric_label, "Sales Revenue")
+        self.assertIsNotNone(res.selection_rationale)
+        self.assertIn("financial/revenue", res.selection_rationale.lower())
+        self.assertIn("user_age", res.available_metrics)
+        self.assertIn("discount_rate", res.available_metrics)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -392,6 +392,8 @@ class ForecastResponse(BaseModel):
     is_available: bool
     unavailable_reason: Optional[str] = None
     metric: Optional[str] = None
+    metric_label: Optional[str] = None
+    selection_rationale: Optional[str] = None
     available_metrics: List[str] = Field(default_factory=list)
     time_column: Optional[str] = None
     horizon: int = 6

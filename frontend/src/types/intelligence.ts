@@ -502,6 +502,8 @@ export interface ForecastResponse {
   is_available: boolean
   unavailable_reason?: string | null
   metric?: string | null
+  metric_label?: string | null
+  selection_rationale?: string | null
   available_metrics: string[]
   time_column?: string | null
   horizon: number

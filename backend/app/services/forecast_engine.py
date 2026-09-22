@@ -257,6 +257,81 @@ def _generate_domain_interpretation(
     return f"{narrative} Forecasts are mathematical extrapolations of past patterns and do not guarantee future outcomes."
 
 
+# --- Metric Ranking & Automatic Selection -------------------------------------
+
+def _rank_forecasting_metrics(df: pd.DataFrame, time_col: str) -> List[Tuple[str, float, str]]:
+    """Rank numeric columns by semantic relevance, domain context, data completeness, and time-series viability.
+
+    Returns:
+        List of tuples: (column_name, suitability_score, selection_rationale)
+        sorted by score descending.
+    """
+    candidates = _find_forecasting_metrics(df)
+    if not candidates:
+        return []
+
+    parsed_dates = pd.to_datetime(df[time_col], errors="coerce")
+    total_rows = max(1, len(df))
+    curr_sym = detect_dataset_currency(df)
+
+    scored: List[Tuple[str, float, str]] = []
+
+    for col in candidates:
+        valid_mask = parsed_dates.notna() & df[col].notna()
+        valid_count = int(valid_mask.sum())
+
+        if valid_count < 6:
+            score = -100.0 + valid_count
+            rationale = f"Insufficient time-series observations ({valid_count} valid periods, minimum 6 required)."
+            scored.append((col, score, rationale))
+            continue
+
+        score = 0.0
+        pretty_name = format_column_label(col)
+        col_lower = col.lower()
+        unit_str, sem_type, _ = detect_column_unit(col, series=df[col], dataset_currency=curr_sym)
+
+        # 1. Semantic Domain Relevance
+        if sem_type == "currency" or any(k in col_lower for k in ("rev", "sale", "income", "gmv", "aov", "turnover")):
+            score += 65.0
+            sem_reason = "primary financial/revenue metric"
+        elif "profit" in col_lower or "ebitda" in col_lower or "margin" in col_lower:
+            score += 60.0
+            sem_reason = "key profitability indicator"
+        elif sem_type in ("quantity", "count") or any(k in col_lower for k in ("qty", "unit", "order", "headcount", "patient", "student", "run", "wicket", "view", "click", "goal")):
+            score += 55.0
+            sem_reason = "primary operational volume measure"
+        elif any(k in col_lower for k in ("cost", "spend", "expense", "budget", "fee", "tax")):
+            score += 48.0
+            sem_reason = "expenditure metric"
+        elif sem_type == "percentage" or unit_str == "%" or "rate" in col_lower:
+            score += 35.0
+            sem_reason = "performance rate metric"
+        else:
+            score += 25.0
+            sem_reason = "continuous numerical time series"
+
+        # 2. Completeness & Observation Count
+        completeness = valid_count / total_rows
+        score += completeness * 20.0
+        score += min(15.0, (valid_count / 10.0))
+
+        # 3. Variance / Diversity (prefer varied over constant, but constant is allowed)
+        distinct_cnt = int(df[col].dropna().nunique())
+        if distinct_cnt > 1:
+            score += 10.0
+
+        rationale = (
+            f"Automatically selected as {sem_reason} based on high completeness "
+            f"({int(completeness * 100)}%), {valid_count} sequential historical observations, "
+            f"and strong domain relevance."
+        )
+        scored.append((col, score, rationale))
+
+    scored.sort(key=lambda x: x[1], reverse=True)
+    return scored
+
+
 # --- Main Forecast Engine ---------------------------------------------------
 
 def compute_forecast(
@@ -267,7 +342,7 @@ def compute_forecast(
     granularity: Optional[str] = None,
     method: Optional[str] = "auto",
 ) -> ForecastResponse:
-    """Compute dataset-agnostic statistical forecast with multi-model evaluation and validation."""
+    """Compute dataset-agnostic statistical forecast with automatic metric selection and multi-model evaluation."""
     # Sanitize horizon (1 to 60 periods)
     horizon = max(1, min(horizon, 60))
 
@@ -298,7 +373,31 @@ def compute_forecast(
             limitations=["Forecasting requires at least one continuous numeric measure."],
         )
 
-    selected_metric = metric if (metric and metric in numeric_metrics) else numeric_metrics[0]
+    # Rank and automatically select the most suitable forecasting metric
+    ranked_metrics = _rank_forecasting_metrics(df, time_col)
+    ranked_metric_names = [r[0] for r in ranked_metrics] if ranked_metrics else numeric_metrics
+
+    if not ranked_metrics or ranked_metrics[0][1] < -50:
+        best_candidate = ranked_metrics[0][0] if ranked_metrics else numeric_metrics[0]
+        return ForecastResponse(
+            dataset_id=dataset_id,
+            is_available=False,
+            unavailable_reason=f"Forecast unavailable because no numeric metric has at least 6 valid date-aligned historical observations (minimum 6 required).",
+            metric=best_candidate,
+            metric_label=format_column_label(best_candidate),
+            available_metrics=ranked_metric_names,
+            time_column=time_col,
+            horizon=horizon,
+            limitations=["At least 6 historical periods are required for statistically valid forecasting."],
+        )
+
+    if metric and metric in numeric_metrics:
+        selected_metric = metric
+        matched = next((r for r in ranked_metrics if r[0] == selected_metric), None)
+        selection_rationale = matched[2] if matched else f"Selected '{format_column_label(selected_metric)}' for forecasting."
+    else:
+        selected_metric = ranked_metrics[0][0]
+        selection_rationale = ranked_metrics[0][2]
 
     # Parse and clean time-series
     parsed_dates = pd.to_datetime(df[time_col], errors="coerce")
@@ -310,7 +409,8 @@ def compute_forecast(
             is_available=False,
             unavailable_reason=f"Forecast unavailable because '{selected_metric}' has only {valid_mask.sum()} valid date-metric observations (minimum 6 required).",
             metric=selected_metric,
-            available_metrics=numeric_metrics,
+            metric_label=format_column_label(selected_metric),
+            available_metrics=ranked_metric_names,
             time_column=time_col,
             horizon=horizon,
             limitations=["At least 6 historical periods are required for statistically valid forecasting."],
@@ -545,7 +645,9 @@ def compute_forecast(
         dataset_id=dataset_id,
         is_available=True,
         metric=selected_metric,
-        available_metrics=numeric_metrics,
+        metric_label=format_column_label(selected_metric),
+        selection_rationale=selection_rationale,
+        available_metrics=ranked_metric_names,
         time_column=time_col,
         horizon=horizon,
         frequency=freq,

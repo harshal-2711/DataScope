@@ -15,7 +15,6 @@ import {
   AlertTriangle,
   Activity,
   Sparkles,
-  ShieldCheck,
   ArrowUpRight,
   ArrowDownRight,
   TrendingUp,
@@ -24,6 +23,9 @@ import {
   CheckCircle2,
   Sliders,
   HelpCircle,
+  ChevronDown,
+  ChevronUp,
+  BarChart3,
 } from "lucide-react"
 import type { ForecastResponse } from "@/types/intelligence"
 import { fetchForecast as apiFetchForecast } from "@/lib/datasetApi"
@@ -39,6 +41,7 @@ export function ForecastViewer({ datasetId }: ForecastViewerProps) {
   const [customHorizon, setCustomHorizon] = useState<string>("")
   const [selectedMetric, setSelectedMetric] = useState<string>("")
   const [selectedMethod, setSelectedMethod] = useState<string>("auto")
+  const [showAdvanced, setShowAdvanced] = useState<boolean>(false)
   const [loading, setLoading] = useState<boolean>(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -62,7 +65,7 @@ export function ForecastViewer({ datasetId }: ForecastViewerProps) {
     loadForecast(horizon, selectedMetric || undefined, selectedMethod)
   }, [datasetId])
 
-  const handleMetricChange = (newMetric: string) => {
+  const handleMetricSwitch = (newMetric: string) => {
     setSelectedMetric(newMetric)
     loadForecast(horizon, newMetric, selectedMethod)
   }
@@ -174,81 +177,65 @@ export function ForecastViewer({ datasetId }: ForecastViewerProps) {
   }
 
   const availableMetrics = data.available_metrics || (data.metric ? [data.metric] : [])
+  const otherMetrics = availableMetrics.filter((m) => m !== data.metric)
 
   return (
     <div className="space-y-6">
-      {/* 1. Header & Interactive Controls */}
+      {/* 1. Intelligent Read-Only Information Section */}
       <div className="rounded-xl border border-border bg-card p-5 shadow-xs space-y-4">
-        <div className="flex flex-wrap items-center justify-between gap-4">
-          <div className="flex items-center gap-3">
-            <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-primary/10 text-primary">
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div className="flex items-start gap-3.5">
+            <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-primary mt-0.5">
               <Sparkles className="h-5 w-5" />
             </div>
-            <div>
+            <div className="space-y-1.5">
               <div className="flex flex-wrap items-center gap-2">
-                <h3 className="text-base font-semibold text-foreground">
-                  Statistical Forecasting:{" "}
-                  <span className="font-mono text-primary">
-                    {formatColumnLabel(data.metric)}
-                  </span>
+                <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+                  Forecasting:
+                </span>
+                <h3 className="text-lg font-bold text-foreground">
+                  {formatColumnLabel(data.metric)}
                 </h3>
+                <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/10 border border-emerald-500/20 px-2.5 py-0.5 text-[11px] font-semibold text-emerald-600 dark:text-emerald-400">
+                  <CheckCircle2 className="h-3 w-3" /> Auto-Selected
+                </span>
+              </div>
+
+              <p className="text-xs text-muted-foreground max-w-2xl leading-relaxed">
+                {data.selection_rationale ||
+                  "Automatically selected based on dataset semantics, data completeness, and time-series suitability."}
+              </p>
+
+              {/* Metadata Details Row */}
+              <div className="flex flex-wrap items-center gap-2 pt-1">
+                <span className="inline-flex items-center gap-1 rounded-md bg-muted px-2.5 py-1 text-xs font-medium text-foreground">
+                  <span className="text-muted-foreground">Source Column:</span>
+                  <code className="font-mono text-primary">{data.metric}</code>
+                </span>
                 {detectedUnit && (
-                  <span className="inline-flex items-center rounded-md bg-secondary px-2 py-0.5 text-xs font-semibold text-secondary-foreground border border-border">
-                    Unit: {detectedUnit}
+                  <span className="inline-flex items-center gap-1 rounded-md bg-secondary px-2.5 py-1 text-xs font-medium text-secondary-foreground border border-border">
+                    <span className="text-muted-foreground">Unit:</span> {detectedUnit}
                   </span>
                 )}
                 {data.frequency_label && (
-                  <span className="inline-flex items-center gap-1 rounded-md bg-muted px-2 py-0.5 text-xs font-medium text-foreground">
+                  <span className="inline-flex items-center gap-1 rounded-md bg-muted px-2.5 py-1 text-xs font-medium text-foreground">
                     <Calendar className="h-3 w-3 text-muted-foreground" />
                     {data.frequency_label} Series
                   </span>
                 )}
+                <span className="inline-flex items-center gap-1 rounded-md bg-muted px-2.5 py-1 text-xs font-medium text-foreground">
+                  <span className="text-muted-foreground">History:</span> {data.historical_points.length} periods
+                </span>
+                <span className="inline-flex items-center gap-1 rounded-md bg-primary/10 border border-primary/20 px-2.5 py-1 text-xs font-medium text-primary">
+                  <Cpu className="h-3 w-3" />
+                  Model: {data.method_used.split("(")[0].trim()}
+                </span>
               </div>
-              <p className="text-xs text-muted-foreground mt-0.5">
-                Time column: <strong>{data.time_column}</strong> | Historical points:{" "}
-                <strong>{data.historical_points.length}</strong> | Horizon: <strong>+{horizon} {data.frequency_label?.toLowerCase()} periods</strong>
-              </p>
-            </div>
-          </div>
-
-          <div className="flex flex-wrap items-center gap-3">
-            {/* Target Metric Selector */}
-            {availableMetrics.length > 1 && (
-              <div className="flex items-center gap-1.5">
-                <span className="text-xs font-medium text-muted-foreground">Metric:</span>
-                <select
-                  value={selectedMetric || data.metric || ""}
-                  onChange={(e) => handleMetricChange(e.target.value)}
-                  className="rounded-lg border border-border bg-background px-2.5 py-1.5 text-xs font-medium text-foreground shadow-xs focus:outline-hidden focus:ring-2 focus:ring-primary"
-                >
-                  {availableMetrics.map((m) => (
-                    <option key={m} value={m}>
-                      {formatColumnLabel(m)}
-                    </option>
-                  ))}
-                </select>
-              </div>
-            )}
-
-            {/* Model Method Selector */}
-            <div className="flex items-center gap-1.5">
-              <span className="text-xs font-medium text-muted-foreground">Model:</span>
-              <select
-                value={selectedMethod}
-                onChange={(e) => handleMethodChange(e.target.value)}
-                className="rounded-lg border border-border bg-background px-2.5 py-1.5 text-xs font-medium text-foreground shadow-xs focus:outline-hidden focus:ring-2 focus:ring-primary"
-              >
-                <option value="auto">Auto (Best Fit)</option>
-                <option value="holt_linear">Holt's Exponential Smoothing</option>
-                <option value="linear_trend">Linear Trend Extrapolation</option>
-                <option value="moving_average">Moving Average</option>
-                <option value="naive">Naive Baseline</option>
-              </select>
             </div>
           </div>
         </div>
 
-        {/* Horizon Presets & Custom Input */}
+        {/* Forecast Horizon Presets */}
         <div className="flex flex-wrap items-center justify-between gap-3 pt-3 border-t border-border/60">
           <div className="flex flex-wrap items-center gap-2">
             <span className="text-xs font-medium text-muted-foreground flex items-center gap-1">
@@ -303,8 +290,28 @@ export function ForecastViewer({ datasetId }: ForecastViewerProps) {
         </div>
       )}
 
-      {/* 2. Executive KPI Row */}
+      {/* 2. Executive KPI Summary Cards */}
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        {/* Current / Latest Actual */}
+        <div className="rounded-xl border border-border bg-card p-4 shadow-xs space-y-1.5">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-medium text-muted-foreground">Latest Actual Value</span>
+            {detectedUnit && (
+              <span className="text-[10px] font-medium text-muted-foreground bg-muted px-1.5 py-0.5 rounded">
+                {detectedUnit}
+              </span>
+            )}
+          </div>
+          <div className="flex items-baseline gap-2">
+            <span className="text-xl font-bold text-foreground">
+              {data.latest_actual != null ? formatMetricValue(data.latest_actual, fmtOpts) : "N/A"}
+            </span>
+          </div>
+          <p className="text-[11px] text-muted-foreground">
+            Latest period: <strong>{data.historical_points[data.historical_points.length - 1]?.period}</strong>
+          </p>
+        </div>
+
         {/* Next Period */}
         <div className="rounded-xl border border-border bg-card p-4 shadow-xs space-y-1.5">
           <div className="flex items-center justify-between">
@@ -360,31 +367,12 @@ export function ForecastViewer({ datasetId }: ForecastViewerProps) {
           </p>
         </div>
 
-        {/* Validation Accuracy */}
-        <div className="rounded-xl border border-border bg-card p-4 shadow-xs space-y-1.5">
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-medium text-muted-foreground">Forecast Fit Accuracy</span>
-            <span className="text-[10px] font-medium text-emerald-600 dark:text-emerald-400 bg-emerald-500/10 px-1.5 py-0.5 rounded">
-              {data.validation_summary?.has_holdout ? "Holdout Validated" : "In-Sample Fit"}
-            </span>
-          </div>
-          <div className="flex items-center gap-2">
-            <ShieldCheck className="h-4 w-4 text-emerald-500" />
-            <span className="text-base font-bold text-foreground">
-              MAPE: {data.accuracy_metrics.mape !== undefined ? `${data.accuracy_metrics.mape}%` : "N/A"}
-            </span>
-          </div>
-          <p className="text-[11px] text-muted-foreground">
-            RMSE: {data.accuracy_metrics.rmse != null ? formatMetricValue(data.accuracy_metrics.rmse, fmtOpts) : "N/A"} | MAE: {data.accuracy_metrics.mae != null ? formatMetricValue(data.accuracy_metrics.mae, fmtOpts) : "N/A"}
-          </p>
-        </div>
-
-        {/* Model Confidence */}
+        {/* Model Accuracy & Confidence */}
         <div className="rounded-xl border border-border bg-card p-4 shadow-xs space-y-1.5">
           <div className="flex items-center justify-between">
             <span className="text-xs font-medium text-muted-foreground">Model Confidence</span>
-            <span className="text-[10px] font-mono text-muted-foreground">
-              {data.method_used.split("(")[0].trim()}
+            <span className="text-[10px] font-medium text-emerald-600 dark:text-emerald-400 bg-emerald-500/10 px-1.5 py-0.5 rounded">
+              {data.validation_summary?.has_holdout ? "Holdout Validated" : "In-Sample Fit"}
             </span>
           </div>
           <div className="flex items-center gap-2">
@@ -398,7 +386,10 @@ export function ForecastViewer({ datasetId }: ForecastViewerProps) {
               {Math.round(data.confidence_score * 100)}%
             </span>
           </div>
-          <p className="text-[11px] text-muted-foreground">Derived from historical residual dispersion</p>
+          <p className="text-[11px] text-muted-foreground">
+            MAPE: {data.accuracy_metrics.mape !== undefined ? `${data.accuracy_metrics.mape}%` : "N/A"} | RMSE:{" "}
+            {data.accuracy_metrics.rmse != null ? formatMetricValue(data.accuracy_metrics.rmse, fmtOpts) : "N/A"}
+          </p>
         </div>
       </div>
 
@@ -410,7 +401,7 @@ export function ForecastViewer({ datasetId }: ForecastViewerProps) {
               Historical Trajectory & Statistical Projections (+{horizon} {data.frequency_label?.toLowerCase()} periods)
             </h3>
             <p className="text-xs text-muted-foreground">
-              Solid blue line represents historical data. Dashed purple line represents statistical projections with shaded 80% & 95% analytical confidence bands.
+              Solid blue line represents historical values. Dashed purple line represents statistical projections with shaded 80% & 95% prediction intervals.
             </p>
           </div>
           <div className="flex items-center gap-2 text-xs">
@@ -532,108 +523,163 @@ export function ForecastViewer({ datasetId }: ForecastViewerProps) {
         </div>
       )}
 
-      {/* 5. Multi-Model Evaluation & Comparison Matrix */}
-      {data.method_comparison && data.method_comparison.length > 0 && (
-        <div className="rounded-xl border border-border bg-card p-5 shadow-xs space-y-3">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <Cpu className="h-4 w-4 text-primary" />
-              <h4 className="text-sm font-semibold text-foreground">
-                Statistical Model Comparison & Validation Matrix
-              </h4>
-            </div>
-            <span className="text-xs text-muted-foreground">
-              {data.validation_summary?.validation_strategy}
+      {/* 5. Optional Other Forecastable Metrics Section */}
+      {otherMetrics.length > 0 && (
+        <div className="rounded-xl border border-border bg-card p-4 shadow-xs space-y-2.5">
+          <div className="flex items-center gap-2">
+            <BarChart3 className="h-4 w-4 text-muted-foreground" />
+            <span className="text-xs font-semibold text-foreground">
+              Other Forecastable Metrics in this Dataset:
             </span>
           </div>
-
-          <div className="overflow-x-auto rounded-lg border border-border">
-            <table className="w-full text-left text-xs">
-              <thead className="border-b border-border bg-muted/40 font-medium text-muted-foreground">
-                <tr>
-                  <th className="py-2.5 px-3">Forecasting Model</th>
-                  <th className="py-2.5 px-3">In-Sample MAE</th>
-                  <th className="py-2.5 px-3">In-Sample RMSE</th>
-                  <th className="py-2.5 px-3">In-Sample MAPE</th>
-                  {data.validation_summary?.has_holdout && (
-                    <>
-                      <th className="py-2.5 px-3">Holdout RMSE</th>
-                      <th className="py-2.5 px-3">Holdout MAE</th>
-                    </>
-                  )}
-                  <th className="py-2.5 px-3 text-right">Status</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-border">
-                {data.method_comparison.map((m) => (
-                  <tr
-                    key={m.method_key}
-                    className={`hover:bg-muted/20 transition-colors ${
-                      m.is_selected ? "bg-primary/5 font-semibold" : ""
-                    }`}
-                  >
-                    <td className="py-2.5 px-3">
-                      <div className="flex items-center gap-1.5">
-                        <span className="text-foreground">{m.method_name}</span>
-                        {m.is_selected && (
-                          <CheckCircle2 className="h-3.5 w-3.5 text-primary shrink-0" />
-                        )}
-                      </div>
-                      <span className="text-[11px] text-muted-foreground font-normal block">
-                        {m.description}
-                      </span>
-                    </td>
-                    <td className="py-2.5 px-3 font-mono">
-                      {m.in_sample_metrics.mae != null
-                        ? formatMetricValue(m.in_sample_metrics.mae, fmtOpts)
-                        : "N/A"}
-                    </td>
-                    <td className="py-2.5 px-3 font-mono">
-                      {m.in_sample_metrics.rmse != null
-                        ? formatMetricValue(m.in_sample_metrics.rmse, fmtOpts)
-                        : "N/A"}
-                    </td>
-                    <td className="py-2.5 px-3 font-mono">
-                      {m.in_sample_metrics.mape != null ? `${m.in_sample_metrics.mape}%` : "N/A"}
-                    </td>
-                    {data.validation_summary?.has_holdout && (
-                      <>
-                        <td className="py-2.5 px-3 font-mono">
-                          {m.holdout_metrics?.rmse != null
-                            ? formatMetricValue(m.holdout_metrics.rmse, fmtOpts)
-                            : "N/A"}
-                        </td>
-                        <td className="py-2.5 px-3 font-mono">
-                          {m.holdout_metrics?.mae != null
-                            ? formatMetricValue(m.holdout_metrics.mae, fmtOpts)
-                            : "N/A"}
-                        </td>
-                      </>
-                    )}
-                    <td className="py-2.5 px-3 text-right">
-                      {m.is_selected ? (
-                        <span className="inline-flex items-center rounded-full bg-primary/10 px-2 py-0.5 text-[11px] font-semibold text-primary">
-                          Active Model
-                        </span>
-                      ) : (
-                        <button
-                          type="button"
-                          onClick={() => handleMethodChange(m.method_key)}
-                          className="text-[11px] text-muted-foreground hover:text-primary underline cursor-pointer"
-                        >
-                          Select
-                        </button>
-                      )}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+          <div className="flex flex-wrap items-center gap-2">
+            {otherMetrics.map((m) => {
+              const u = detectColumnUnit(m).unit
+              return (
+                <button
+                  key={m}
+                  type="button"
+                  onClick={() => handleMetricSwitch(m)}
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-muted/40 hover:bg-primary/10 hover:border-primary/30 px-3 py-1.5 text-xs font-medium text-foreground transition-all cursor-pointer"
+                >
+                  <span>{formatColumnLabel(m)}</span>
+                  {u && <span className="text-[10px] text-muted-foreground">({u})</span>}
+                </button>
+              )
+            })}
           </div>
         </div>
       )}
 
-      {/* 6. Forecast Limitations & Disclaimers */}
+      {/* 6. Advanced Settings Collapsible (Model Comparison & Manual Selection) */}
+      <div className="rounded-xl border border-border bg-card overflow-hidden shadow-xs">
+        <button
+          type="button"
+          onClick={() => setShowAdvanced(!showAdvanced)}
+          className="w-full flex items-center justify-between p-4 text-left hover:bg-muted/20 transition-colors"
+        >
+          <div className="flex items-center gap-2">
+            <Cpu className="h-4 w-4 text-primary" />
+            <div>
+              <span className="text-xs font-semibold text-foreground">
+                Advanced Model Diagnostics & Manual Override
+              </span>
+              <span className="text-[11px] text-muted-foreground block">
+                Currently running {data.method_used.split("(")[0].trim()} (Auto-Selected for lowest evaluation error)
+              </span>
+            </div>
+          </div>
+          <div className="flex items-center gap-1 text-xs text-muted-foreground">
+            <span>{showAdvanced ? "Hide" : "Show"}</span>
+            {showAdvanced ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+          </div>
+        </button>
+
+        {showAdvanced && data.method_comparison && data.method_comparison.length > 0 && (
+          <div className="p-4 pt-0 border-t border-border space-y-3">
+            <div className="flex items-center justify-between pt-3">
+              <span className="text-xs text-muted-foreground">
+                Validation Strategy: <strong>{data.validation_summary?.validation_strategy}</strong>
+              </span>
+              {selectedMethod !== "auto" && (
+                <button
+                  type="button"
+                  onClick={() => handleMethodChange("auto")}
+                  className="text-xs text-primary hover:underline cursor-pointer"
+                >
+                  Reset to Auto Selection
+                </button>
+              )}
+            </div>
+
+            <div className="overflow-x-auto rounded-lg border border-border">
+              <table className="w-full text-left text-xs">
+                <thead className="border-b border-border bg-muted/40 font-medium text-muted-foreground">
+                  <tr>
+                    <th className="py-2.5 px-3">Forecasting Model</th>
+                    <th className="py-2.5 px-3">In-Sample MAE</th>
+                    <th className="py-2.5 px-3">In-Sample RMSE</th>
+                    <th className="py-2.5 px-3">In-Sample MAPE</th>
+                    {data.validation_summary?.has_holdout && (
+                      <>
+                        <th className="py-2.5 px-3">Holdout RMSE</th>
+                        <th className="py-2.5 px-3">Holdout MAE</th>
+                      </>
+                    )}
+                    <th className="py-2.5 px-3 text-right">Selection</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-border">
+                  {data.method_comparison.map((m) => (
+                    <tr
+                      key={m.method_key}
+                      className={`hover:bg-muted/20 transition-colors ${
+                        m.is_selected ? "bg-primary/5 font-semibold" : ""
+                      }`}
+                    >
+                      <td className="py-2.5 px-3">
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-foreground">{m.method_name}</span>
+                          {m.is_selected && (
+                            <CheckCircle2 className="h-3.5 w-3.5 text-primary shrink-0" />
+                          )}
+                        </div>
+                        <span className="text-[11px] text-muted-foreground font-normal block">
+                          {m.description}
+                        </span>
+                      </td>
+                      <td className="py-2.5 px-3 font-mono">
+                        {m.in_sample_metrics.mae != null
+                          ? formatMetricValue(m.in_sample_metrics.mae, fmtOpts)
+                          : "N/A"}
+                      </td>
+                      <td className="py-2.5 px-3 font-mono">
+                        {m.in_sample_metrics.rmse != null
+                          ? formatMetricValue(m.in_sample_metrics.rmse, fmtOpts)
+                          : "N/A"}
+                      </td>
+                      <td className="py-2.5 px-3 font-mono">
+                        {m.in_sample_metrics.mape != null ? `${m.in_sample_metrics.mape}%` : "N/A"}
+                      </td>
+                      {data.validation_summary?.has_holdout && (
+                        <>
+                          <td className="py-2.5 px-3 font-mono">
+                            {m.holdout_metrics?.rmse != null
+                              ? formatMetricValue(m.holdout_metrics.rmse, fmtOpts)
+                              : "N/A"}
+                          </td>
+                          <td className="py-2.5 px-3 font-mono">
+                            {m.holdout_metrics?.mae != null
+                              ? formatMetricValue(m.holdout_metrics.mae, fmtOpts)
+                              : "N/A"}
+                          </td>
+                        </>
+                      )}
+                      <td className="py-2.5 px-3 text-right">
+                        {m.is_selected ? (
+                          <span className="inline-flex items-center rounded-full bg-primary/10 px-2 py-0.5 text-[11px] font-semibold text-primary">
+                            Active Model
+                          </span>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => handleMethodChange(m.method_key)}
+                            className="text-[11px] text-muted-foreground hover:text-primary underline cursor-pointer"
+                          >
+                            Use Model
+                          </button>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* 7. Forecast Limitations & Disclaimers */}
       <div className="rounded-xl border border-border bg-muted/30 p-4 text-xs text-muted-foreground space-y-2">
         <div className="flex items-center gap-1.5 font-semibold text-foreground">
           <AlertTriangle className="h-3.5 w-3.5 text-amber-500" />
