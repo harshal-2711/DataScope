@@ -141,10 +141,12 @@ class TestRiskIntelligenceEngine(unittest.TestCase):
         self.assertIn("No significant risks detected in the available data.", res.overview.summary_statement)
 
     def test_non_summable_metric_rejected_from_concentration(self):
-        """Verify non-summable metrics like Aging days are NOT summed for concentration risks."""
-        # 100 records with Aging days and customer_login_type
+        """Verify non-summable metrics like Aging days are NOT summed for concentration risks,
+        and categorical distributions like Login Type or Device Type are placed in distribution_insights."""
+        # 100 records with Aging days, Customer_Login_type, and Device_Type
         df = pd.DataFrame({
             "Customer_Login_type": ["Member"] * 95 + ["Guest"] * 5,
+            "Device_Type": ["Web"] * 93 + ["Mobile"] * 7,
             "Aging": [30.0] * 95 + [10.0] * 5,
             "Rating": [4.8] * 95 + [3.2] * 5,
         })
@@ -152,16 +154,23 @@ class TestRiskIntelligenceEngine(unittest.TestCase):
         domain = DomainIdentitySchema(domain_id="general", name="General", description="")
 
         res = compute_full_risk_intelligence(df, "test_aging", profiles, domain)
-        # Verify NO risk sums 'Aging' or 'Rating' as high concentration
+        # Verify NO risk sums 'Aging' or 'Rating' as concentration risk
         aging_risks = [r for r in res.risks if "aging" in (r.affected_metric or "").lower() and r.category != "Data Quality Issue"]
         self.assertEqual(len(aging_risks), 0)
 
-        # Login type concentration should be classified strictly as Distribution Observation (low severity)
+        # Login type and Device Type MUST NOT appear in primary risks list
         login_risks = [r for r in res.risks if "login" in (r.affected_column or "").lower()]
-        for lr in login_risks:
-            self.assertEqual(lr.category, "Distribution Observation")
-            self.assertEqual(lr.severity, "low")
-            self.assertNotEqual(lr.severity, "high")
+        device_risks = [r for r in res.risks if "device" in (r.affected_column or "").lower()]
+        self.assertEqual(len(login_risks), 0)
+        self.assertEqual(len(device_risks), 0)
+
+        # But should be captured cleanly in distribution_insights
+        login_dist = [d for d in res.distribution_insights if "login" in d.dimension.lower()]
+        device_dist = [d for d in res.distribution_insights if "device" in d.dimension.lower()]
+        self.assertEqual(len(login_dist), 1)
+        self.assertEqual(login_dist[0].dominant_category, "Member")
+        self.assertEqual(len(device_dist), 1)
+        self.assertEqual(device_dist[0].dominant_category, "Web")
 
     def test_all_risks_have_why_it_matters_and_human_readable_fields(self):
         """Verify every detected risk item includes why_it_matters and clean titles."""

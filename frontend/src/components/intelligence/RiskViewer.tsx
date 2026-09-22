@@ -232,8 +232,64 @@ function RiskCardItem({ risk }: { risk: RiskItem }) {
   )
 }
 
+function DistributionInsightsSection({ insights }: { insights: import("@/types/intelligence").DistributionInsight[] }) {
+  if (!insights || insights.length === 0) return null
+
+  return (
+    <div className="rounded-xl border border-border bg-card p-5 shadow-xs space-y-4">
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border/60 pb-3">
+        <div className="space-y-0.5">
+          <div className="flex items-center gap-2">
+            <h4 className="text-sm font-bold text-foreground">Dataset Distribution Insights</h4>
+            <span className="inline-flex items-center rounded-full bg-muted px-2 py-0.5 text-[10px] font-semibold text-muted-foreground border border-border">
+              Descriptive Observations Only
+            </span>
+          </div>
+          <p className="text-xs text-muted-foreground">
+            Dominant categorical patterns in the dataset. These reflect population composition, not operational risks or vulnerabilities.
+          </p>
+        </div>
+      </div>
+
+      <div className="grid gap-3 sm:grid-cols-2">
+        {insights.map((ins) => (
+          <div
+            key={ins.insight_id}
+            className="rounded-lg border border-border/70 bg-muted/20 p-4 space-y-2.5 transition-colors hover:bg-muted/30"
+          >
+            <div className="flex items-center justify-between text-xs">
+              <span className="font-semibold text-foreground">{ins.dimension_label}</span>
+              <span className="font-mono text-xs font-bold text-primary">{ins.percentage}%</span>
+            </div>
+
+            {/* Progress / Distribution Bar */}
+            <div className="space-y-1">
+              <div className="h-1.5 w-full rounded-full bg-muted overflow-hidden">
+                <div
+                  className="h-full rounded-full bg-primary/70"
+                  style={{ width: `${Math.min(ins.percentage, 100)}%` }}
+                />
+              </div>
+              <div className="flex justify-between text-[10px] text-muted-foreground">
+                <span>Dominant: <strong className="text-foreground">{ins.dominant_category}</strong></span>
+                <span>{ins.category_count.toLocaleString()} of {ins.total_records.toLocaleString()} rows</span>
+              </div>
+            </div>
+
+            <p className="text-xs text-muted-foreground leading-relaxed">{ins.description}</p>
+            <div className="rounded-md bg-muted/60 p-2 text-[11px] text-muted-foreground italic">
+              {ins.observation_note}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
 export function RiskViewer({ data, risks: legacyRisks }: RiskViewerProps) {
   const allRisks = data?.risks ?? legacyRisks ?? []
+  const distributionInsights = data?.distribution_insights ?? []
   const overview = data?.overview
 
   const [severityFilter, setSeverityFilter] = useState<"all" | "high" | "medium" | "low">("all")
@@ -284,19 +340,25 @@ export function RiskViewer({ data, risks: legacyRisks }: RiskViewerProps) {
 
   if (!allRisks || allRisks.length === 0) {
     return (
-      <div className="rounded-2xl border border-emerald-500/20 bg-emerald-500/5 p-8 text-center shadow-xs">
-        <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-emerald-500/10 text-emerald-500 mb-3">
-          <CheckCircle2 className="h-6 w-6" />
+      <div className="space-y-6">
+        <div className="rounded-2xl border border-emerald-500/20 bg-emerald-500/5 p-8 text-center shadow-xs">
+          <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-emerald-500/10 text-emerald-500 mb-3">
+            <CheckCircle2 className="h-6 w-6" />
+          </div>
+          <h3 className="text-base font-semibold text-foreground">No significant risks detected in the available data.</h3>
+          <p className="mx-auto max-w-xl text-xs text-muted-foreground mt-2 leading-relaxed">
+            {overview?.summary_statement ||
+              "Evaluated metrics fall within standard operational and statistical ranges. No severe performance contractions or major data hygiene issues were identified."}
+          </p>
+          <div className="mt-4 inline-flex items-center gap-1.5 rounded-md bg-muted px-3 py-1.5 text-[11px] text-muted-foreground">
+            <Info className="h-3.5 w-3.5" />
+            <span>Note: Some risks may not be detectable from this dataset alone.</span>
+          </div>
         </div>
-        <h3 className="text-base font-semibold text-foreground">No significant risks detected in the available data.</h3>
-        <p className="mx-auto max-w-xl text-xs text-muted-foreground mt-2 leading-relaxed">
-          {overview?.summary_statement ||
-            "Evaluated metrics fall within standard operational and statistical ranges. No severe performance contractions or major data hygiene issues were identified."}
-        </p>
-        <div className="mt-4 inline-flex items-center gap-1.5 rounded-md bg-muted px-3 py-1.5 text-[11px] text-muted-foreground">
-          <Info className="h-3.5 w-3.5" />
-          <span>Note: Some risks may not be detectable from this dataset alone.</span>
-        </div>
+
+        {distributionInsights.length > 0 && (
+          <DistributionInsightsSection insights={distributionInsights} />
+        )}
       </div>
     )
   }
@@ -358,7 +420,7 @@ export function RiskViewer({ data, risks: legacyRisks }: RiskViewerProps) {
           <div className="mt-2 text-2xl font-bold tracking-tight text-blue-600 dark:text-blue-400">
             {lowCount}
           </div>
-          <div className="text-[11px] text-muted-foreground mt-1">Distribution observations</div>
+          <div className="text-[11px] text-muted-foreground mt-1">Observations & notes</div>
         </div>
 
         <div className="rounded-xl border border-border bg-card p-4 shadow-xs col-span-2 lg:col-span-1">
@@ -498,6 +560,11 @@ export function RiskViewer({ data, risks: legacyRisks }: RiskViewerProps) {
             <RiskCardItem key={risk.risk_id} risk={risk} />
           ))}
         </div>
+      )}
+
+      {/* SECTION E: DATASET DISTRIBUTION INSIGHTS (SEPARATE DESCRIPTIVE SECTION) */}
+      {distributionInsights.length > 0 && (
+        <DistributionInsightsSection insights={distributionInsights} />
       )}
 
       {/* Dataset Safety Note */}

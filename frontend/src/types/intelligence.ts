@@ -127,12 +127,25 @@ export interface RiskOverview {
   summary_statement: string
 }
 
+export interface DistributionInsight {
+  insight_id: string
+  dimension: string
+  dimension_label: string
+  dominant_category: string
+  category_count: number
+  total_records: number
+  percentage: number
+  description: string
+  observation_note: string
+}
+
 export interface RiskIntelligenceResponse {
   dataset_id: string
   domain_id: string
   domain_name: string
   overview: RiskOverview
   risks: RiskItem[]
+  distribution_insights?: DistributionInsight[]
   categories: string[]
   affected_metrics: string[]
   has_time_dimension: boolean

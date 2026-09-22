@@ -16,6 +16,7 @@ import pandas as pd
 
 from app.domains.base import RiskRule
 from app.schemas.domain_blueprint import (
+    DistributionInsightSchema,
     DomainIdentitySchema,
     RiskItemSchema,
     RiskOverviewSchema,
@@ -164,6 +165,7 @@ def compute_full_risk_intelligence(
 ) -> RiskIntelligenceResponse:
     """Execute deep universal and domain-aware risk detection across all dimensions."""
     risks: List[RiskItemSchema] = []
+    distribution_insights: List[DistributionInsightSchema] = []
     seen_risk_keys: Set[str] = set()
     data_safety_notes: List[str] = []
     data_quality_count = 0
@@ -534,7 +536,6 @@ def compute_full_risk_intelligence(
     # -------------------------------------------------------------------------
     # 3. CROSS-SECTIONAL & OPERATIONAL SIGNALS (CLEAN & NON-MISLEADING)
     # -------------------------------------------------------------------------
-    # 3a. Meaningful Concentration on Valid Dependencies ONLY
     categorical_cols = [
         p.name for p in profiles
         if p.role in ("categorical", "identifier") and p.name in df.columns and p.distinct_count and 2 <= p.distinct_count <= 200
@@ -544,19 +545,50 @@ def compute_full_risk_intelligence(
         if p.role == "numeric" and p.name in df.columns and not _is_non_summable_metric(p.name)
     ]
 
+    # 3a. Descriptive Population & Distribution Insights (Descriptive Observations Only)
     for dim_col in categorical_cols:
         dim_lower = str(dim_col).lower().replace("-", "_").replace(" ", "_")
-        
-        # Check if dimension is a non-dependency / UI type (e.g. Device_Type, Login_Type, Browser, OS, Payment_Method)
+        human_dim = humanize_column_name(dim_col)
+        try:
+            s_cat = df[dim_col].dropna().astype(str)
+            if len(s_cat) >= 15:
+                counts = s_cat.value_counts()
+                if len(counts) >= 2:
+                    top_cat = str(counts.index[0])
+                    top_cnt = int(counts.iloc[0])
+                    tot_cnt = int(len(s_cat))
+                    pct = (top_cnt / tot_cnt) * 100.0
+                    if pct >= 70.0:
+                        distribution_insights.append(
+                            DistributionInsightSchema(
+                                insight_id=f"dist_{dim_col}",
+                                dimension=dim_col,
+                                dimension_label=human_dim,
+                                dominant_category=top_cat,
+                                category_count=top_cnt,
+                                total_records=tot_cnt,
+                                percentage=round(pct, 1),
+                                description=f"'{top_cat}' represents {pct:.1f}% of recorded entries in {human_dim} ({top_cnt:,} of {tot_cnt:,} rows).",
+                                observation_note=f"Descriptive population characteristic. High prevalence in {human_dim} does not indicate an operational vulnerability.",
+                            )
+                        )
+        except Exception:
+            pass
+
+    # 3b. Genuine Operational Concentration Risks (Validated Dependencies ONLY)
+    for dim_col in categorical_cols:
+        dim_lower = str(dim_col).lower().replace("-", "_").replace(" ", "_")
         is_non_dep = any(term in dim_lower for term in _NON_DEPENDENCY_DIMENSIONS)
         is_valid_dep = any(term in dim_lower for term in _VALID_DEPENDENCY_DIMENSIONS)
 
+        # Strictly skip non-dependency dimensions (e.g. login_type, device_type, payment_method, etc.)
+        if is_non_dep or not is_valid_dep:
+            continue
+
         for met_col in numeric_cols_all:
             met_lower = str(met_col).lower().replace("-", "_").replace(" ", "_")
-
-            # Check if metric is a valid volume/financial metric
             is_valid_met = any(term in met_lower for term in _VALID_CONCENTRATION_METRICS)
-            if not is_valid_met and not is_valid_dep:
+            if not is_valid_met:
                 continue
 
             key = f"conc_{dim_col}_{met_col}"
@@ -565,93 +597,55 @@ def compute_full_risk_intelligence(
 
             try:
                 clean = df[[dim_col, met_col]].dropna()
-                if len(clean) >= 15:
+                if len(clean) >= 20:
                     grouped = clean.groupby(dim_col)[met_col].sum()
-                    total_vol = float(grouped.sum())
-                    if total_vol > 0:
-                        top_val = float(grouped.max())
-                        top_name = str(grouped.idxmax())
-                        top_share = (top_val / total_vol) * 100.0
+                    if len(grouped) >= 3:
+                        total_vol = float(grouped.sum())
+                        if total_vol > 0:
+                            top_val = float(grouped.max())
+                            top_name = str(grouped.idxmax())
+                            top_share = (top_val / total_vol) * 100.0
 
-                        # Case A: True Business Dependency (Customer / Supplier on Revenue / Spend)
-                        if is_valid_dep and top_share >= 50.0:
-                            severity = "high" if top_share >= 80.0 else "medium"
-                            human_dim = humanize_column_name(dim_col)
-                            human_met = humanize_column_name(met_col)
-                            top_val_fmt, unit_lbl = _format_val(top_val, met_col, domain.domain_id, dataset_currency)
-                            tot_val_fmt, _ = _format_val(total_vol, met_col, domain.domain_id, dataset_currency)
+                            if top_share >= 50.0:
+                                severity = "high" if top_share >= 80.0 else "medium"
+                                human_dim = humanize_column_name(dim_col)
+                                human_met = humanize_column_name(met_col)
+                                top_val_fmt, unit_lbl = _format_val(top_val, met_col, domain.domain_id, dataset_currency)
+                                tot_val_fmt, _ = _format_val(total_vol, met_col, domain.domain_id, dataset_currency)
 
-                            risks.append(
-                                RiskItemSchema(
-                                    risk_id=key,
-                                    title=f"High concentration in {human_dim}: {top_name}",
-                                    category="Operational Risk",
-                                    label="Dependency risk",
-                                    description=(
-                                        f"Single entity '{top_name}' represents {top_share:.1f}% of total '{human_met}' "
-                                        f"({top_val_fmt} out of {tot_val_fmt})."
-                                    ),
-                                    severity=severity,
-                                    severity_reason=f"Top entity accounts for {top_share:.1f}% of total volume across {len(grouped)} entities.",
-                                    affected_metric=met_col,
-                                    affected_column=dim_col,
-                                    current_value=top_val,
-                                    current_value_formatted=top_val_fmt,
-                                    previous_value=total_vol,
-                                    previous_value_formatted=tot_val_fmt,
-                                    absolute_change=top_val,
-                                    absolute_change_formatted=f"{top_share:.1f}% share",
-                                    pct_change=round(top_share, 1),
-                                    unit=unit_lbl or "units",
-                                    time_period="Full Dataset",
-                                    evidence=f"'{top_name}' contributes {top_val_fmt} of total {tot_val_fmt} ({top_share:.1f}% share).",
-                                    why_it_matters="High reliance on a single entity creates operational vulnerability if their activity changes.",
-                                    confidence=0.95,
-                                    qualification="Evaluated directly from entity summation over available records.",
-                                    recommended_action=f"Assess diversification options to balance operational dependency on '{top_name}'.",
-                                    risk_type="concentration",
+                                risks.append(
+                                    RiskItemSchema(
+                                        risk_id=key,
+                                        title=f"High concentration in {human_dim}: {top_name}",
+                                        category="Operational Risk",
+                                        label="Dependency risk",
+                                        description=(
+                                            f"Single entity '{top_name}' represents {top_share:.1f}% of total '{human_met}' "
+                                            f"({top_val_fmt} out of {tot_val_fmt})."
+                                        ),
+                                        severity=severity,
+                                        severity_reason=f"Top entity accounts for {top_share:.1f}% of total volume across {len(grouped)} entities.",
+                                        affected_metric=met_col,
+                                        affected_column=dim_col,
+                                        current_value=top_val,
+                                        current_value_formatted=top_val_fmt,
+                                        previous_value=total_vol,
+                                        previous_value_formatted=tot_val_fmt,
+                                        absolute_change=top_val,
+                                        absolute_change_formatted=f"{top_share:.1f}% share",
+                                        pct_change=round(top_share, 1),
+                                        unit=unit_lbl or "units",
+                                        time_period="Full Dataset",
+                                        evidence=f"'{top_name}' contributes {top_val_fmt} of total {tot_val_fmt} ({top_share:.1f}% share).",
+                                        why_it_matters="High reliance on a single entity creates operational vulnerability if their activity changes.",
+                                        confidence=0.95,
+                                        qualification="Evaluated directly from entity summation over available records.",
+                                        recommended_action=f"Assess diversification options to balance operational dependency on '{top_name}'.",
+                                        risk_type="concentration",
+                                    )
                                 )
-                            )
-                            seen_risk_keys.add(key)
-                            break
-
-                        # Case B: Descriptive Distribution Observation (e.g. 85%+ in Payment Method or Channel) - LOW severity only
-                        elif is_non_dep and top_share >= 80.0:
-                            human_dim = humanize_column_name(dim_col)
-                            human_met = humanize_column_name(met_col)
-                            top_val_fmt, unit_lbl = _format_val(top_val, met_col, domain.domain_id, dataset_currency)
-                            tot_val_fmt, _ = _format_val(total_vol, met_col, domain.domain_id, dataset_currency)
-
-                            risks.append(
-                                RiskItemSchema(
-                                    risk_id=key,
-                                    title=f"Majority volume in {human_dim}: {top_name}",
-                                    category="Distribution Observation",
-                                    label="Distribution pattern",
-                                    description=f"'{top_name}' accounts for {top_share:.1f}% of recorded '{human_met}'.",
-                                    severity="low",
-                                    severity_reason="Descriptive categorical pattern; does not automatically constitute operational vulnerability.",
-                                    affected_metric=met_col,
-                                    affected_column=dim_col,
-                                    current_value=top_val,
-                                    current_value_formatted=top_val_fmt,
-                                    previous_value=total_vol,
-                                    previous_value_formatted=tot_val_fmt,
-                                    absolute_change=top_val,
-                                    absolute_change_formatted=f"{top_share:.1f}% share",
-                                    pct_change=round(top_share, 1),
-                                    unit=unit_lbl or "units",
-                                    time_period="Full Dataset",
-                                    evidence=f"'{top_name}' represents {top_share:.1f}% of total {human_met}.",
-                                    why_it_matters="Understanding dominant categories helps contextualize overall data composition.",
-                                    confidence=0.90,
-                                    qualification="Descriptive observational distribution.",
-                                    recommended_action=f"Consider whether sub-segmenting by '{human_dim}' provides additional insights.",
-                                    risk_type="distribution_observation",
-                                )
-                            )
-                            seen_risk_keys.add(key)
-                            break
+                                seen_risk_keys.add(key)
+                                break
             except Exception:
                 continue
 
@@ -848,6 +842,7 @@ def compute_full_risk_intelligence(
         domain_name=domain.name if domain else "General Tabular Dataset",
         overview=overview,
         risks=risks,
+        distribution_insights=distribution_insights,
         categories=categories,
         affected_metrics=affected_metrics,
         has_time_dimension=has_time_dimension,

@@ -127,16 +127,30 @@ class RiskOverviewSchema(BaseModel):
     summary_statement: str = ""
 
 
+class DistributionInsightSchema(BaseModel):
+    insight_id: str
+    dimension: str
+    dimension_label: str
+    dominant_category: str
+    category_count: int
+    total_records: int
+    percentage: float
+    description: str
+    observation_note: str
+
+
 class RiskIntelligenceResponse(BaseModel):
     dataset_id: str
     domain_id: str
     domain_name: str
     overview: RiskOverviewSchema
     risks: List[RiskItemSchema] = Field(default_factory=list)
+    distribution_insights: List[DistributionInsightSchema] = Field(default_factory=list)
     categories: List[str] = Field(default_factory=list)
     affected_metrics: List[str] = Field(default_factory=list)
     has_time_dimension: bool = False
     data_safety_notes: List[str] = Field(default_factory=list)
+
 
 
 
