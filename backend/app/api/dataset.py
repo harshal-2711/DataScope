@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 from fastapi import APIRouter, File, HTTPException, Query, UploadFile
@@ -14,8 +15,11 @@ from app.schemas.domain_blueprint import (
     RiskIntelligenceResponse,
     TrendsIntelligenceResponse,
 )
-from app.services import dataset_service
+from app.services import dataset_service, dataset_store
 from app.services.dataset_exceptions import DatasetError
+
+logger = logging.getLogger("datascope.api.dataset")
+logger.setLevel(logging.INFO)
 
 router = APIRouter(tags=["dataset"])
 
@@ -227,9 +231,19 @@ def get_dataset_data_quality(dataset_id: str) -> dict:
 )
 def get_dataset_risk_intelligence(dataset_id: str) -> dict:
     """Return universal, domain-aware risk intelligence and statistical anomaly detections."""
+    logger.info("[ROUTE-HIT] GET /api/dataset/%s/risk received", dataset_id)
     try:
-        return dataset_service.get_risk_intelligence(dataset_id)
+        res = dataset_service.get_risk_intelligence(dataset_id)
+        logger.info("[ROUTE-SUCCESS] GET /api/dataset/%s/risk completed", dataset_id)
+        return res
     except DatasetError as exc:
+        logger.warning(
+            "[APPLICATION-404] Dataset '%s' failed in risk endpoint: %s (Status: %d, Store entries: %d)",
+            dataset_id,
+            exc.message,
+            exc.status_code,
+            len(dataset_store._store),
+        )
         raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
 
 
