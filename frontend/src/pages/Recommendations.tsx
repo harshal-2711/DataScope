@@ -3,20 +3,19 @@ import { Lightbulb, Loader2 } from "lucide-react"
 import { PageHeader } from "@/components/shared/PageHeader"
 import { EmptyState } from "@/components/shared/EmptyState"
 import { Button } from "@/components/ui/button"
-import { DomainRecommendations } from "@/components/intelligence/DomainRecommendations"
-import { DomainHeader } from "@/components/intelligence/DomainHeader"
+import { RecommendationsViewer } from "@/components/intelligence/RecommendationsViewer"
 import { useActiveDataset } from "@/context/DatasetContext"
-import { useDomainIntelligence } from "@/hooks/useDomainIntelligence"
+import { useRecommendationsIntelligence } from "@/hooks/useRecommendationsIntelligence"
 
 export default function Recommendations() {
   const { activeDataset } = useActiveDataset()
-  const intelState = useDomainIntelligence(activeDataset?.dataset_id ?? null)
+  const recState = useRecommendationsIntelligence(activeDataset?.dataset_id ?? null)
 
   return (
     <div className="space-y-6">
       <PageHeader
         title="Evidence-Based Recommendations"
-        description="Actionable strategic opportunities synthesized directly from verified data findings with explicit limitations."
+        description="Universal, domain-aware recommendations converting verified statistical findings into structured, non-causal business actions."
       />
 
       {!activeDataset ? (
@@ -32,22 +31,19 @@ export default function Recommendations() {
             </Button>
           </div>
         </div>
-      ) : intelState.status === "loading" ? (
+      ) : recState.status === "loading" ? (
         <div className="flex h-64 items-center justify-center">
           <div className="flex items-center gap-2 text-sm text-muted-foreground">
             <Loader2 className="h-4 w-4 animate-spin text-primary" />
-            Synthesizing evidence-based recommendations...
+            Synthesizing evidence-based recommendations across quality, trends, risks, and domain KPIs...
           </div>
         </div>
-      ) : intelState.status === "error" ? (
+      ) : recState.status === "error" ? (
         <div className="rounded-xl border border-rose-500/20 bg-rose-500/5 p-6 text-center text-sm text-rose-600">
-          {intelState.message}
+          {recState.message}
         </div>
-      ) : intelState.status === "success" ? (
-        <div className="space-y-6">
-          <DomainHeader domain={intelState.data.domain} />
-          <DomainRecommendations recommendations={intelState.data.recommendations} />
-        </div>
+      ) : recState.status === "success" ? (
+        <RecommendationsViewer data={recState.data} />
       ) : null}
     </div>
   )

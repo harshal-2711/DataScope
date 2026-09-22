@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 from typing import Any, Dict, List, Literal, Optional, Union
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
+
 
 
 class DomainIdentitySchema(BaseModel):
@@ -514,28 +515,47 @@ class DataQualityReportResponse(BaseModel):
     recommendations: List[str] = Field(default_factory=list)
 
 
-class CompetitionSegmentSchema(BaseModel):
+class CompetitorEntitySchema(BaseModel):
     rank: int
     name: str
-    value: float
-    formatted_value: str
-    share_pct: Optional[float] = None
-    record_count: int = 0
+    is_our_entity: bool = False
+    revenue: Optional[float] = None
+    revenue_formatted: Optional[str] = None
+    profit: Optional[float] = None
+    profit_formatted: Optional[str] = None
+    profit_margin_pct: Optional[float] = None
+    market_share_pct: Optional[float] = None
+    units_sold: Optional[float] = None
+    units_sold_formatted: Optional[str] = None
     growth_rate_pct: Optional[float] = None
-    status: Literal["top", "above_average", "average", "below_average", "bottom"] = "average"
+    pricing_index: Optional[float] = None
+    pricing_index_formatted: Optional[str] = None
+    records_count: int = 0
+    status_label: str = "Reported Competitor"
 
 
-class CompetitionGapSchema(BaseModel):
+class MarketGapSchema(BaseModel):
     title: str
-    gap_type: Literal["top_vs_bottom", "top_vs_average", "leader_dominance", "growth_disparity"]
-    segment_a: str
-    segment_b: str
-    absolute_gap: float
-    formatted_absolute_gap: str
-    ratio: float
+    gap_type: Literal["revenue_gap", "margin_gap", "growth_gap", "pricing_gap", "share_gap"]
+    metric_name: str
+    leader_entity: str
+    trailing_entity: str
+    absolute_difference: float
+    formatted_difference: str
     pct_difference: float
-    explanation: str
+    factual_statement: str
     evidence: str
+
+
+class MarketStrategyRecommendationSchema(BaseModel):
+    title: str
+    category: Literal["pricing_strategy", "cost_efficiency", "growth_expansion", "product_focus", "market_share"]
+    priority: Literal["high", "medium", "low"]
+    metric: str
+    comparison: str
+    evidence: str
+    suggested_investigation: str
+    limitation: str
 
 
 class CompetitionTimeComparisonSchema(BaseModel):
@@ -551,51 +571,157 @@ class CompetitionTimeComparisonSchema(BaseModel):
     summary: Optional[str] = None
 
 
-class CompetitionOverviewSchema(BaseModel):
-    comparison_dimension: str
-    comparison_dimension_label: str
-    entity_type_label: str = "Entity"
-    available_dimensions: List[str] = Field(default_factory=list)
+class MarketOverviewSchema(BaseModel):
+    industry_market_name: str
+    competitor_column: str
+    competitor_column_label: str
+    total_competitors_tracked: int
+    total_reported_market_revenue: Optional[float] = None
+    total_reported_market_revenue_formatted: Optional[str] = None
+    reporting_period: Optional[str] = None
+    data_coverage_description: str
+    top_competitor_name: str
+    top_competitor_metric_value: float
+    top_competitor_metric_formatted: str
+    benchmark_average_revenue: Optional[float] = None
+    benchmark_average_revenue_formatted: Optional[str] = None
     primary_metric: str
     primary_metric_label: str
-    available_metrics: List[str] = Field(default_factory=list)
-    aggregation_method: Literal["sum", "mean", "count"] = "sum"
-    total_segments: int
-    top_segment_name: str
-    top_segment_value: float
-    top_segment_formatted: str
-    bottom_segment_name: str
-    bottom_segment_value: float
-    bottom_segment_formatted: str
-    benchmark_average: float
-    benchmark_average_formatted: str
-    benchmark_median: float
-    benchmark_median_formatted: str
-    performance_spread_ratio: float
     summary_statement: str
+
+
+class MarketBenchmarkPreviewResponse(BaseModel):
+    is_valid: bool
+    filename: str
+    company_count: int
+    companies_sample: List[str] = Field(default_factory=list)
+    industry: Optional[str] = None
+    reporting_period: Optional[str] = None
+    detected_fields: List[str] = Field(default_factory=list)
+    missing_required_fields: List[str] = Field(default_factory=list)
+    missing_optional_fields: List[str] = Field(default_factory=list)
+    warnings: List[str] = Field(default_factory=list)
+    sample_records: List[Dict[str, Any]] = Field(default_factory=list)
+    validation_summary: str
 
 
 class CompetitionIntelligenceResponse(BaseModel):
     dataset_id: str
-    is_available: bool = True
-    competition_mode: Literal["internal_benchmarking", "unavailable"] = "unavailable"
-    mode_label: str = "Dataset-Based Benchmarking"
-    entity_type: Optional[str] = None
+    is_available: bool = False
+    market_data_status: Literal["market_data_detected", "market_data_absent", "insufficient_data"] = "market_data_absent"
+    status_title: str = "Market competition analysis is not available yet."
     unavailable_reason: Optional[str] = None
-    summary_statement: Optional[str] = None
-    missing_requirements: List[str] = Field(default_factory=list)
-    required_data_guide: List[str] = Field(default_factory=list)
+    summary_statement: str = "Your current dataset contains internal transaction data, but no verified competitor or market benchmark data."
     domain_id: Optional[str] = None
     domain_name: Optional[str] = None
     currency_symbol: Optional[str] = None
-    overview: Optional[CompetitionOverviewSchema] = None
-    segments: List[CompetitionSegmentSchema] = Field(default_factory=list)
-    gaps: List[CompetitionGapSchema] = Field(default_factory=list)
-    areas_of_strength: List[str] = Field(default_factory=list)
-    areas_for_improvement: List[str] = Field(default_factory=list)
+    has_external_benchmark: bool = False
+    benchmark_filename: Optional[str] = None
+    overview: Optional[MarketOverviewSchema] = None
+    competitors: List[CompetitorEntitySchema] = Field(default_factory=list)
+    market_gaps: List[MarketGapSchema] = Field(default_factory=list)
+    strategic_recommendations: List[MarketStrategyRecommendationSchema] = Field(default_factory=list)
     time_comparison: Optional[CompetitionTimeComparisonSchema] = None
-    data_limitations: List[str] = Field(default_factory=list)
+    missing_requirements: List[str] = Field(default_factory=list)
+    required_market_fields: List[Dict[str, Any]] = Field(default_factory=list)
+    market_limitations: List[str] = Field(default_factory=list)
     methodology_notes: List[str] = Field(default_factory=list)
+class RecommendationsOverviewSchema(BaseModel):
+    total_recommendations: int
+    critical_count: int
+    high_count: int
+    medium_count: int
+    low_count: int
+    evidence_backed_count: int
+    data_limitations_summary: List[str] = Field(default_factory=list)
+    summary_statement: str
+
+
+class ActionPlanSchema(BaseModel):
+    immediate_action: str
+    follow_up_investigation: str
+    metric_to_monitor: str
+    suggested_review_period: Optional[str] = None
+    data_required: str
+
+
+class EvidenceRecommendationSchema(BaseModel):
+    rec_id: str
+    title: str
+    category: Literal[
+        "performance_improvement",
+        "risk_mitigation",
+        "cost_optimization",
+        "revenue_opportunities",
+        "data_quality",
+        "operational_efficiency",
+        "market_competitive_actions",
+    ]
+    category_label: str
+    priority: Literal["critical", "high", "medium", "low"]
+    priority_reason: str
+    business_problem: str
+    why_it_matters: str
+    evidence: str
+    short_summary: Optional[str] = None
+    what_we_found: List[str] = Field(default_factory=list)
+    action_steps: List[str] = Field(default_factory=list)
+    expected_result: Optional[str] = None
+    key_metrics: List[Dict[str, str]] = Field(default_factory=list)
+    metric_name: Optional[str] = None
+    entity_name: Optional[str] = None
+    current_value: Optional[str] = None
+    baseline_value: Optional[str] = None
+    pct_change: Optional[str] = None
+    root_cause_signal: str
+    recommended_action: str
+    expected_objective: str
+    data_required: str
+    limitations: str
+    problem_detected: Optional[str] = None
+    observation: Optional[str] = None
+    interpretation: Optional[str] = None
+    success_measure: Optional[str] = None
+    action_plan: Optional[ActionPlanSchema] = None
+    suggested_investigation_route: Optional[str] = None
+    suggested_investigation_label: Optional[str] = None
+    relevant_metric: Optional[str] = None
+    source_columns: List[str] = Field(default_factory=list)
+    time_period: Optional[str] = None
+    evidence_strength: Literal[
+        "verified_statistical_finding",
+        "strong_trend_correlation",
+        "data_hygiene_warning",
+        "exploratory_pattern",
+    ] = "verified_statistical_finding"
+
+    @model_validator(mode="after")
+    def populate_backwards_compat_fields(self) -> "EvidenceRecommendationSchema":
+        if not self.problem_detected:
+            self.problem_detected = self.business_problem
+        if not self.observation:
+            self.observation = self.evidence
+        if not self.interpretation:
+            self.interpretation = self.root_cause_signal
+        if not self.success_measure:
+            self.success_measure = self.expected_result or self.expected_objective
+        return self
+
+
+
+class RecommendationsIntelligenceResponse(BaseModel):
+    dataset_id: str
+    is_available: bool = True
+    domain_id: str = "general"
+    domain_name: str = "General Analytics"
+    currency_symbol: Optional[str] = None
+    overview: RecommendationsOverviewSchema
+    recommendations: List[EvidenceRecommendationSchema] = Field(default_factory=list)
+    categories_present: List[str] = Field(default_factory=list)
+    has_time_dimension: bool = False
     analyzed_at: Optional[str] = None
+
+
+
 
 

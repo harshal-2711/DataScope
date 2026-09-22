@@ -651,28 +651,47 @@ export interface DataQualityReportResponse {
   recommendations: string[]
 }
 
-export interface CompetitionSegment {
+export interface CompetitorEntity {
   rank: number
   name: string
-  value: number
-  formatted_value: string
-  share_pct?: number | null
-  record_count: number
+  is_our_entity?: boolean
+  revenue?: number | null
+  revenue_formatted?: string | null
+  profit?: number | null
+  profit_formatted?: string | null
+  profit_margin_pct?: number | null
+  market_share_pct?: number | null
+  units_sold?: number | null
+  units_sold_formatted?: string | null
   growth_rate_pct?: number | null
-  status: "top" | "above_average" | "average" | "below_average" | "bottom"
+  pricing_index?: number | null
+  pricing_index_formatted?: string | null
+  records_count: number
+  status_label: string
 }
 
-export interface CompetitionGap {
+export interface MarketGap {
   title: string
-  gap_type: "top_vs_bottom" | "top_vs_average" | "leader_dominance" | "growth_disparity"
-  segment_a: string
-  segment_b: string
-  absolute_gap: number
-  formatted_absolute_gap: string
-  ratio: number
+  gap_type: "revenue_gap" | "margin_gap" | "growth_gap" | "pricing_gap" | "share_gap"
+  metric_name: string
+  leader_entity: string
+  trailing_entity: string
+  absolute_difference: number
+  formatted_difference: string
   pct_difference: number
-  explanation: string
+  factual_statement: string
   evidence: string
+}
+
+export interface MarketStrategyRecommendation {
+  title: string
+  category: "pricing_strategy" | "cost_efficiency" | "growth_expansion" | "product_focus" | "market_share"
+  priority: "high" | "medium" | "low"
+  metric: string
+  comparison: string
+  evidence: string
+  suggested_investigation: string
+  limitation: string
 }
 
 export interface CompetitionTimeComparison {
@@ -688,53 +707,158 @@ export interface CompetitionTimeComparison {
   summary?: string | null
 }
 
-export interface CompetitionOverview {
-  comparison_dimension: string
-  comparison_dimension_label: string
-  entity_type_label: string
-  available_dimensions: string[]
+export interface MarketOverview {
+  industry_market_name: string
+  competitor_column: string
+  competitor_column_label: string
+  total_competitors_tracked: number
+  total_reported_market_revenue?: number | null
+  total_reported_market_revenue_formatted?: string | null
+  reporting_period?: string | null
+  data_coverage_description: string
+  top_competitor_name: string
+  top_competitor_metric_value: number
+  top_competitor_metric_formatted: string
+  benchmark_average_revenue?: number | null
+  benchmark_average_revenue_formatted?: string | null
   primary_metric: string
   primary_metric_label: string
-  available_metrics: string[]
-  aggregation_method: "sum" | "mean" | "count"
-  total_segments: number
-  top_segment_name: string
-  top_segment_value: number
-  top_segment_formatted: string
-  bottom_segment_name: string
-  bottom_segment_value: number
-  bottom_segment_formatted: string
-  benchmark_average: number
-  benchmark_average_formatted: string
-  benchmark_median: number
-  benchmark_median_formatted: string
-  performance_spread_ratio: number
   summary_statement: string
+}
+
+export interface RequiredMarketFieldGuide {
+  field_name: string
+  description: string
+  example: string
+  required: boolean
+}
+
+export interface MarketBenchmarkPreview {
+  is_valid: boolean
+  filename: string
+  company_count: number
+  companies_sample: string[]
+  industry?: string | null
+  reporting_period?: string | null
+  detected_fields: string[]
+  missing_required_fields: string[]
+  missing_optional_fields: string[]
+  warnings: string[]
+  sample_records: Record<string, any>[]
+  validation_summary: string
 }
 
 export interface CompetitionIntelligenceResponse {
   dataset_id: string
   is_available: boolean
-  competition_mode: "internal_benchmarking" | "unavailable"
-  mode_label: string
-  entity_type?: string | null
+  market_data_status: "market_data_detected" | "market_data_absent" | "insufficient_data"
+  status_title: string
   unavailable_reason?: string | null
-  summary_statement?: string | null
-  missing_requirements: string[]
-  required_data_guide: string[]
+  summary_statement: string
   domain_id?: string | null
   domain_name?: string | null
   currency_symbol?: string | null
-  overview?: CompetitionOverview | null
-  segments: CompetitionSegment[]
-  gaps: CompetitionGap[]
-  areas_of_strength: string[]
-  areas_for_improvement: string[]
+  has_external_benchmark?: boolean
+  benchmark_filename?: string | null
+  overview?: MarketOverview | null
+  competitors: CompetitorEntity[]
+  market_gaps: MarketGap[]
+  strategic_recommendations: MarketStrategyRecommendation[]
   time_comparison?: CompetitionTimeComparison | null
-  data_limitations: string[]
+  missing_requirements: string[]
+  required_market_fields: RequiredMarketFieldGuide[]
+  market_limitations: string[]
   methodology_notes: string[]
   analyzed_at?: string | null
 }
+
+export type RecommendationCategory =
+  | "performance_improvement"
+  | "risk_mitigation"
+  | "cost_optimization"
+  | "revenue_opportunities"
+  | "data_quality"
+  | "operational_efficiency"
+  | "market_competitive_actions"
+
+export type RecommendationPriority = "critical" | "high" | "medium" | "low"
+
+export interface ActionPlan {
+  immediate_action: string
+  follow_up_investigation: string
+  metric_to_monitor: string
+  suggested_review_period?: string | null
+  data_required: string
+}
+
+export interface EvidenceRecommendation {
+  rec_id: string
+  title: string
+  category: RecommendationCategory
+  category_label: string
+  priority: RecommendationPriority
+  priority_reason: string
+  business_problem: string
+  why_it_matters: string
+  evidence: string
+  short_summary?: string | null
+  what_we_found?: string[]
+  action_steps?: string[]
+  expected_result?: string | null
+  key_metrics?: Array<{ label: string; value: string }>
+  metric_name?: string | null
+  entity_name?: string | null
+  current_value?: string | null
+  baseline_value?: string | null
+  pct_change?: string | null
+  root_cause_signal: string
+  recommended_action: string
+  expected_objective: string
+  data_required: string
+  limitations: string
+  problem_detected?: string | null
+  observation?: string | null
+  interpretation?: string | null
+  success_measure?: string | null
+  action_plan?: ActionPlan | null
+  suggested_investigation_route?: string | null
+  suggested_investigation_label?: string | null
+  relevant_metric?: string | null
+  source_columns: string[]
+  time_period?: string | null
+  evidence_strength:
+    | "verified_statistical_finding"
+    | "strong_trend_correlation"
+    | "data_hygiene_warning"
+    | "exploratory_pattern"
+}
+
+export interface RecommendationsOverview {
+  total_recommendations: number
+  critical_count: number
+  high_count: number
+  medium_count: number
+  low_count: number
+  evidence_backed_count: number
+  data_limitations_summary: string[]
+  summary_statement: string
+}
+
+export interface RecommendationsIntelligenceResponse {
+  dataset_id: string
+  is_available: boolean
+  domain_id: string
+  domain_name: string
+  currency_symbol?: string | null
+  overview: RecommendationsOverview
+  recommendations: EvidenceRecommendation[]
+  categories_present: string[]
+  has_time_dimension: boolean
+  analyzed_at?: string | null
+}
+
+
+
 
 
 

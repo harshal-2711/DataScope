@@ -1,13 +1,13 @@
-"""Universal, domain-aware Competition Intelligence Engine for DataScope.
+"""Market-Based Competition Intelligence Engine for DataScope.
 
-Strictly validates competitive entities (Company, Brand, Competitor, Manufacturer,
-Product Brand, Supplier, Team). Never misclassifies arbitrary dataset categories
-such as Customer Login Type, Device Type, Demographics, or Regions as competitors.
+Analyzes external market competition, competitor comparisons, market gaps,
+and evidence-backed strategic recommendations from verified competitor datasets.
+Never misclassifies internal transaction columns (such as Customer Login Type,
+Device Type, Product Categories) as market competitors.
 """
 from __future__ import annotations
 
 import logging
-import re
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -15,106 +15,263 @@ import numpy as np
 import pandas as pd
 
 from app.schemas.domain_blueprint import (
-    CompetitionGapSchema,
     CompetitionIntelligenceResponse,
-    CompetitionOverviewSchema,
-    CompetitionSegmentSchema,
+    CompetitorEntitySchema,
     CompetitionTimeComparisonSchema,
     DomainIdentitySchema,
+    MarketBenchmarkPreviewResponse,
+    MarketGapSchema,
+    MarketOverviewSchema,
+    MarketStrategyRecommendationSchema,
 )
 from app.services.column_formatter import format_metric_display, humanize_column_name
-from app.services.column_profiler import ColumnProfile
+from app.services.column_profiler import ColumnProfile, profile_dataset
 
 logger = logging.getLogger("datascope.services.competition_engine")
 
-# Strict blacklist of categorical patterns that MUST NEVER be classified as competitors
-_REJECTED_CATEGORY_TERMS = {
-    # Customer / User classification
+# Blacklist of internal transaction/customer terms that MUST NEVER be treated as market competitors
+_INTERNAL_TRANSACTION_TERMS = {
     "login", "customer_login", "customer_login_type", "login_type", "user_type",
     "customer_type", "member", "membership", "membership_status", "auth", "account_type",
-    # Device / Technical environment
     "device", "device_type", "browser", "os", "platform", "client", "client_type",
-    "ip", "user_agent", "screen_resolution", "channel",
-    # Demographics & Personal Attributes
     "gender", "sex", "age", "age_group", "marital", "marital_status", "education",
-    "education_level", "ethnicity", "nationality", "occupation",
-    # Geography / Locations (descriptive distributions, not competing firms)
     "region", "country", "city", "state", "zone", "zip", "zip_code", "postal", "postal_code",
     "area", "location", "territory", "province", "district",
-    # Transactional attributes / Logistics
     "payment", "payment_method", "payment_type", "card_type", "shipping", "ship_mode",
     "shipping_mode", "delivery_type", "fulfillment_type", "order_status", "status",
-    "stage", "priority", "aging", "delay",
-    # Feedback & Ratings categories
-    "rating_category", "sentiment", "feedback", "feedback_type", "survey_response",
+    "stage", "priority", "aging", "delay", "order_id", "customer_id", "customer_name",
+    "rating_category", "sentiment", "feedback", "category", "sub_category", "product_name",
+    "product", "item_name", "sku",
 }
 
-# Whitelist of valid competitive entity keywords per domain
-_VALID_ENTITY_RULES = [
-    # (Entity Type Label, Keyword list, Domain list or None for any)
-    ("Company", ["company", "competitor", "firm", "enterprise", "business_name", "organization", "agency", "ticker", "institution"], None),
-    ("Brand", ["brand", "brand_name", "manufacturer", "make", "publisher", "record_label", "studio", "product_brand"], None),
-    ("Product", ["product_name", "product", "model_name", "model", "item_name", "sku_name", "car_model", "track_name", "movie_title"], None),
-    ("Supplier", ["supplier", "vendor", "contractor", "bidder"], ["procurement", "supply_chain", "operations"]),
-    ("Team", ["team", "franchise", "club", "country", "player", "batsman", "bowler"], ["sports", "sports_cricket"]),
+# Explicit whitelist of column terms that represent external market competitors / peer companies
+_MARKET_COMPETITOR_TERMS = [
+    "competitor", "competitor_name", "competitors", "peer_company", "peer_firm",
+    "rival", "rival_company", "market_competitor", "market_player", "competing_firm",
+    "peer_brand", "brand_competitor", "company_name", "company", "firm", "enterprise",
 ]
 
-# Keywords for ranking numeric comparison metrics
-_METRIC_DOMAIN_KEYWORDS = {
-    "ecommerce": [
-        ("profit", "sum", "currency"),
-        ("revenue", "sum", "currency"),
-        ("sales", "sum", "currency"),
-        ("amount", "sum", "currency"),
-        ("spend", "sum", "currency"),
-        ("quantity", "sum", "quantity"),
-        ("units", "sum", "quantity"),
-        ("orders", "sum", "count"),
-        ("margin", "mean", "percentage"),
-    ],
-    "finance": [
-        ("net_profit", "sum", "currency"),
-        ("profit", "sum", "currency"),
-        ("revenue", "sum", "currency"),
-        ("income", "sum", "currency"),
-        ("operating_expense", "sum", "currency"),
-        ("expense", "sum", "currency"),
-        ("cost", "sum", "currency"),
-        ("assets", "sum", "currency"),
-        ("roi", "mean", "percentage"),
-        ("growth", "mean", "percentage"),
-    ],
-    "sports_cricket": [
-        ("runs", "sum", "number"),
-        ("points", "sum", "number"),
-        ("wickets", "sum", "number"),
-        ("score", "sum", "number"),
-        ("strike_rate", "mean", "score"),
-        ("matches", "sum", "number"),
-    ],
-    "people_hr": [
-        ("salary", "mean", "currency"),
-        ("compensation", "mean", "currency"),
-        ("monthly_income", "mean", "currency"),
-        ("performance_rating", "mean", "score"),
-        ("tenure", "mean", "duration"),
-    ],
-    "healthcare": [
-        ("patient_count", "sum", "number"),
-        ("admissions", "sum", "number"),
-        ("billing_amount", "sum", "currency"),
-        ("cost", "sum", "currency"),
-        ("length_of_stay", "mean", "duration"),
-    ],
-    "procurement": [
-        ("tender_value", "sum", "currency"),
-        ("contract_value", "sum", "currency"),
-        ("award_value", "sum", "currency"),
-        ("amount", "sum", "currency"),
-        ("spend", "sum", "currency"),
-        ("duration_in_days", "mean", "duration"),
-    ],
-}
+# Required market fields specifications for user guidance
+REQUIRED_MARKET_FIELDS_GUIDE = [
+    {
+        "field_name": "competitor_name / company",
+        "description": "Name of each competing company, firm, or brand in the market.",
+        "example": "Apex Corp, Nexus Ltd, Zenith Inc",
+        "required": True,
+    },
+    {
+        "field_name": "revenue / sales",
+        "description": "Total revenue or reported turnover for each competitor.",
+        "example": "$4,500,000, $3,200,000",
+        "required": True,
+    },
+    {
+        "field_name": "profit / net_income",
+        "description": "Reported operating profit or net income for margin calculation.",
+        "example": "$650,000, $420,000",
+        "required": False,
+    },
+    {
+        "field_name": "market_share_pct",
+        "description": "Reported market share percentage (if available from market research).",
+        "example": "34.5%, 22.0%",
+        "required": False,
+    },
+    {
+        "field_name": "growth_rate_pct / period",
+        "description": "Year-over-year growth rate or historical periods for trend comparison.",
+        "example": "+14.2%, -3.5% or 2023-Q1..2024-Q4",
+        "required": False,
+    },
+    {
+        "field_name": "price / price_index",
+        "description": "Average selling price or benchmark pricing index against market average.",
+        "example": "$129.99, 105.2 index",
+        "required": False,
+    },
+]
+
+
+def validate_and_preview_benchmark(df: pd.DataFrame, filename: str) -> MarketBenchmarkPreviewResponse:
+    """Validate an uploaded market benchmark dataset (CSV/XLSX/JSON) and return preview & quality warnings."""
+    if df is None or df.empty:
+        return MarketBenchmarkPreviewResponse(
+            is_valid=False,
+            filename=filename,
+            company_count=0,
+            companies_sample=[],
+            industry=None,
+            reporting_period=None,
+            detected_fields=[],
+            missing_required_fields=["competitor_name / company (Required)", "revenue / sales (Required)"],
+            missing_optional_fields=["profit / net_income", "market_share_pct", "growth_rate_pct", "period", "price"],
+            warnings=["The uploaded file contains no rows or records."],
+            sample_records=[],
+            validation_summary="Validation failed: The dataset is empty.",
+        )
+
+    comp_col = None
+    rev_col = None
+    profit_col = None
+    share_col = None
+    growth_col = None
+    period_col = None
+    industry_col = None
+    price_col = None
+
+    for col in df.columns:
+        col_norm = str(col).strip().lower().replace("-", "_").replace(" ", "_")
+        
+        # Check competitor
+        if not comp_col:
+            for term in _MARKET_COMPETITOR_TERMS:
+                if col_norm == term or col_norm == f"{term}_name" or col_norm == f"name_{term}" or f"_{term}_" in f"_{col_norm}_":
+                    comp_col = col
+                    break
+
+        # Revenue
+        if not rev_col and any(term in col_norm for term in ["revenue", "sales", "turnover", "income", "spend", "value"]):
+            if pd.to_numeric(df[col], errors="coerce").notna().sum() > 0:
+                rev_col = col
+
+        # Profit
+        if not profit_col and any(term in col_norm for term in ["profit", "net_profit", "operating_profit", "earnings"]):
+            if pd.to_numeric(df[col], errors="coerce").notna().sum() > 0:
+                profit_col = col
+
+        # Share
+        if not share_col and any(term in col_norm for term in ["market_share", "share_pct", "share", "market_pct"]):
+            if pd.to_numeric(df[col], errors="coerce").notna().sum() > 0:
+                share_col = col
+
+        # Growth
+        if not growth_col and any(term in col_norm for term in ["growth", "growth_rate", "yoy_growth", "cagr"]):
+            if pd.to_numeric(df[col], errors="coerce").notna().sum() > 0:
+                growth_col = col
+
+        # Period / Date
+        if not period_col and any(term in col_norm for term in ["period", "date", "year", "quarter", "month", "time"]):
+            period_col = col
+
+        # Industry
+        if not industry_col and any(term in col_norm for term in ["industry", "market", "sector", "domain"]):
+            industry_col = col
+
+        # Price
+        if not price_col and any(term in col_norm for term in ["price", "avg_price", "pricing", "unit_price", "price_index"]):
+            if pd.to_numeric(df[col], errors="coerce").notna().sum() > 0:
+                price_col = col
+
+    detected = []
+    missing_req = []
+    missing_opt = []
+    warnings = []
+
+    if comp_col:
+        detected.append(f"Company/Competitor: '{comp_col}'")
+    else:
+        missing_req.append("competitor_name / company (Required)")
+
+    if rev_col:
+        detected.append(f"Revenue/Sales: '{rev_col}'")
+    else:
+        missing_req.append("revenue / sales (Required)")
+
+    if profit_col:
+        detected.append(f"Profit/Net Income: '{profit_col}'")
+    else:
+        missing_opt.append("profit / net_income")
+
+    if share_col:
+        detected.append(f"Market Share %: '{share_col}'")
+    else:
+        missing_opt.append("market_share_pct")
+
+    if growth_col:
+        detected.append(f"Growth Rate %: '{growth_col}'")
+    else:
+        missing_opt.append("growth_rate_pct")
+
+    if period_col:
+        detected.append(f"Period/Date: '{period_col}'")
+    else:
+        missing_opt.append("period / date")
+
+    if industry_col:
+        detected.append(f"Industry: '{industry_col}'")
+    else:
+        missing_opt.append("industry")
+
+    if price_col:
+        detected.append(f"Price/Index: '{price_col}'")
+    else:
+        missing_opt.append("price / price_index")
+
+    company_count = 0
+    companies_sample = []
+    if comp_col:
+        unique_companies = [str(x) for x in df[comp_col].dropna().unique().tolist() if str(x).strip()]
+        company_count = len(unique_companies)
+        companies_sample = unique_companies[:6]
+        
+        if company_count < 2:
+            warnings.append(f"Only {company_count} distinct company found. Meaningful market comparison requires at least 2 distinct companies.")
+
+        if not period_col and df[comp_col].duplicated().sum() > 0:
+            dup_count = int(df[comp_col].duplicated().sum())
+            warnings.append(f"Detected {dup_count} duplicate company rows without a period column. Values will be aggregated per company.")
+
+        null_comps = int(df[comp_col].isna().sum())
+        if null_comps > 0:
+            warnings.append(f"Found {null_comps} rows with missing or blank company names.")
+
+    if rev_col:
+        rev_numeric = pd.to_numeric(df[rev_col], errors="coerce")
+        null_rev = int(rev_numeric.isna().sum())
+        if null_rev > 0:
+            warnings.append(f"Found {null_rev} rows with non-numeric or missing revenue values.")
+        if (rev_numeric < 0).any():
+            neg_count = int((rev_numeric < 0).sum())
+            warnings.append(f"Found {neg_count} rows with negative revenue values.")
+
+    industry_str = None
+    if industry_col:
+        mode_val = df[industry_col].dropna().mode()
+        if not mode_val.empty:
+            industry_str = str(mode_val.iloc[0])
+
+    period_str = None
+    if period_col:
+        try:
+            non_null_p = df[period_col].dropna().astype(str)
+            if len(non_null_p) > 0:
+                period_str = f"{non_null_p.min()} - {non_null_p.max()}"
+        except Exception:
+            pass
+
+    sample_df = df.head(5).copy()
+    sample_records = sample_df.where(pd.notnull(sample_df), None).to_dict(orient="records")
+
+    is_valid = bool(comp_col and rev_col and company_count >= 2)
+    if is_valid:
+        validation_summary = f"Verified market benchmark dataset containing {company_count} companies with {len(detected)} detected metric fields."
+    else:
+        validation_summary = f"Validation incomplete: {', '.join(missing_req) if missing_req else 'At least 2 distinct companies required'}."
+
+    return MarketBenchmarkPreviewResponse(
+        is_valid=is_valid,
+        filename=filename,
+        company_count=company_count,
+        companies_sample=companies_sample,
+        industry=industry_str,
+        reporting_period=period_str,
+        detected_fields=detected,
+        missing_required_fields=missing_req,
+        missing_optional_fields=missing_opt,
+        warnings=warnings,
+        sample_records=sample_records,
+        validation_summary=validation_summary,
+    )
 
 
 def _find_date_column(df: pd.DataFrame, profiles: List[ColumnProfile]) -> Optional[str]:
@@ -129,7 +286,7 @@ def _find_date_column(df: pd.DataFrame, profiles: List[ColumnProfile]) -> Option
         if pd.api.types.is_datetime64_any_dtype(df[col]):
             return col
 
-    date_keywords = ["date", "time", "timestamp", "period", "day", "month", "year", "order_date", "transaction_date"]
+    date_keywords = ["date", "time", "timestamp", "period", "day", "month", "year", "quarter"]
     for col in df.columns:
         col_lower = str(col).lower()
         if any(kw in col_lower for kw in date_keywords):
@@ -144,130 +301,54 @@ def _find_date_column(df: pd.DataFrame, profiles: List[ColumnProfile]) -> Option
     return None
 
 
-def _is_rejected_category(col_name: str) -> bool:
-    """Check if a column is an invalid, non-competitive category (e.g. Login Type, Device Type)."""
+def _is_market_competitor_column(col_name: str, profile: ColumnProfile, row_count: int) -> bool:
+    """Strictly verify if a column represents genuine external market competitors."""
     norm = col_name.strip().lower().replace("-", "_").replace(" ", "_")
-    parts = set(norm.split("_"))
     
-    # Direct match or substring in blacklist
-    if norm in _REJECTED_CATEGORY_TERMS:
-        return True
-        
-    for rej in _REJECTED_CATEGORY_TERMS:
-        if rej in norm:
-            return True
-            
-    return False
-
-
-def _detect_valid_competitive_entity(
-    col_name: str,
-    profile: ColumnProfile,
-    row_count: int,
-    domain_id: str,
-) -> Optional[Tuple[str, float]]:
-    """Strictly evaluate whether a column is a genuine competitive entity (Brand, Company, Team, etc.).
-    Returns (EntityTypeLabel, score) or None if not a valid competitive entity.
-    """
-    if profile.role in ("datetime", "numeric", "ignore", "identifier"):
+    # Reject internal transaction patterns
+    if norm in _INTERNAL_TRANSACTION_TERMS:
         return False
-        
-    # Check strict rejection list first
-    if _is_rejected_category(col_name):
-        return None
-        
-    # Cardinality constraints: must have between 2 and 150 discrete entities
+    for rej in _INTERNAL_TRANSACTION_TERMS:
+        if rej in norm:
+            return False
+
+    # Check whitelist first
+    is_whitelist_match = False
+    for term in _MARKET_COMPETITOR_TERMS:
+        if norm == term or norm == f"{term}_name" or norm == f"name_{term}" or f"_{term}_" in f"_{norm}_":
+            is_whitelist_match = True
+            break
+
+    if not is_whitelist_match:
+        return False
+
+    # If it is a whitelist match, don't allow pure numeric or datetime types
+    if profile.role in ("datetime", "numeric"):
+        return False
+
+    # High-cardinality guard (e.g. unique user identifiers)
     distinct_count = profile.distinct_count
-    if distinct_count < 2 or distinct_count > 150:
-        return None
-        
+    if distinct_count > 100:
+        return False
     if row_count > 10 and (distinct_count / row_count) > 0.95:
-        return None
+        return False
 
-    norm = col_name.strip().lower().replace("-", "_").replace(" ", "_")
-    
-    # Match against valid entity rules
-    for entity_label, keywords, allowed_domains in _VALID_ENTITY_RULES:
-        if allowed_domains and domain_id not in allowed_domains:
-            continue
-            
-        for kw in keywords:
-            # Exact match or compound match (e.g. 'product_brand', 'company_name', 'competitor_id')
-            if norm == kw or norm == f"{kw}_name" or norm == f"name_{kw}" or f"_{kw}_" in f"_{norm}_":
-                score = 100.0
-                if 3 <= distinct_count <= 40:
-                    score += 20.0
-                return (entity_label, score)
-
-    return None
+    return True
 
 
-def _find_candidate_metrics(
-    df: pd.DataFrame,
-    profiles: List[ColumnProfile],
-    domain: DomainIdentitySchema,
-) -> List[Tuple[str, str, str]]:
-    """Find and rank all suitable continuous numeric comparison metrics."""
+def _find_numeric_metric(df: pd.DataFrame, profiles: List[ColumnProfile], keywords: List[str]) -> Optional[str]:
+    """Look for a specific continuous numeric metric matching keywords."""
     profile_map = {p.name: p for p in profiles}
-    candidates = []
-    
-    domain_id = domain.domain_id if domain else "general"
-    domain_kw = _METRIC_DOMAIN_KEYWORDS.get(domain_id, [])
-
     for col in df.columns:
         if col not in profile_map:
             continue
         p = profile_map[col]
         if p.role != "numeric":
             continue
-            
-        if p.distinct_count <= 1:
-            continue
-            
         col_lower = col.lower()
-        score = 10.0
-        agg_method = "sum"
-        sem_type = "number"
-        
-        # Determine semantic type & aggregation method
-        if "profit" in col_lower or "revenue" in col_lower or "sales" in col_lower or "price" in col_lower or "cost" in col_lower or "spend" in col_lower or "amount" in col_lower or "salary" in col_lower:
-            sem_type = "currency"
-            agg_method = "sum" if "salary" not in col_lower else "mean"
-        elif "rate" in col_lower or "pct" in col_lower or "percent" in col_lower or "ratio" in col_lower or "margin" in col_lower:
-            agg_method = "mean"
-            sem_type = "percentage"
-        elif "avg" in col_lower or "rating" in col_lower or "score" in col_lower:
-            agg_method = "mean"
-            sem_type = "score"
-        elif "duration" in col_lower or "days" in col_lower or "hours" in col_lower:
-            agg_method = "mean"
-            sem_type = "duration"
-        elif "units" in col_lower or "quantity" in col_lower or "qty" in col_lower:
-            sem_type = "quantity"
-            agg_method = "sum"
-
-        # Domain keywords matching
-        matched_domain = False
-        for idx, (kw, def_agg, def_sem) in enumerate(domain_kw):
-            if kw in col_lower:
-                score += 50.0 - (idx * 2)
-                agg_method = def_agg
-                sem_type = def_sem
-                matched_domain = True
-                break
-                
-        if not matched_domain:
-            if "profit" in col_lower or "revenue" in col_lower or "sales" in col_lower or "spend" in col_lower or "cost" in col_lower:
-                score += 35.0
-            elif "units" in col_lower or "quantity" in col_lower or "runs" in col_lower or "points" in col_lower:
-                score += 25.0
-            else:
-                score += 15.0
-
-        candidates.append(((col, agg_method, sem_type), score))
-        
-    candidates.sort(key=lambda x: x[1], reverse=True)
-    return [c[0] for c in candidates]
+        if any(kw in col_lower for kw in keywords):
+            return col
+    return None
 
 
 def compute_competition_intelligence(
@@ -276,289 +357,289 @@ def compute_competition_intelligence(
     profiles: List[ColumnProfile],
     domain: DomainIdentitySchema,
     dataset_currency: Optional[str] = None,
+    benchmark_df: Optional[pd.DataFrame] = None,
+    benchmark_filename: Optional[str] = None,
 ) -> CompetitionIntelligenceResponse:
-    """Universal, domain-aware calculation of competition intelligence with strict entity verification."""
-    if df is None or df.empty:
+    """Market-Oriented Competition Intelligence Engine."""
+    has_benchmark = benchmark_df is not None and not benchmark_df.empty
+    target_df = benchmark_df if has_benchmark else df
+    target_profiles = profile_dataset(target_df) if has_benchmark else profiles
+
+    if target_df is None or target_df.empty:
         return CompetitionIntelligenceResponse(
             dataset_id=dataset_id,
             is_available=False,
-            competition_mode="unavailable",
-            mode_label="Competition Analysis Unavailable",
-            unavailable_reason="External competition analysis is unavailable for this dataset.",
-            summary_statement="This dataset does not contain verified company, brand or competitor information. We cannot compare your business with other companies using this data alone.",
+            market_data_status="insufficient_data",
+            status_title="Market competition analysis is not available yet.",
+            unavailable_reason="Dataset is empty or contains 0 records.",
+            summary_statement="Your current dataset contains no records to analyze.",
             missing_requirements=[
-                "Company or Brand column (e.g., 'Brand', 'Company', 'Competitor', 'Manufacturer', or 'Product Brand')",
-                "Comparable performance metrics (e.g., 'Revenue', 'Profit', 'Units Sold', 'Market Share')",
-                "Optional external competitor data or industry benchmarks",
+                "Upload a dataset containing verified competitor entities and comparable market metrics.",
             ],
-            required_data_guide=[
-                "To enable Dataset-Based Benchmarking, upload a dataset with a verified 'Brand', 'Company', 'Manufacturer', or 'Product' column.",
-                "For multi-firm competitive intelligence, include records for peer competitors with corresponding performance measures.",
-            ],
-            data_limitations=["Dataset contains 0 records."],
+            required_market_fields=REQUIRED_MARKET_FIELDS_GUIDE,
+            market_limitations=["0 records available."],
         )
 
     domain_id = domain.domain_id if domain else "general"
-    row_count = len(df)
-    profile_map = {p.name: p for p in profiles}
+    domain_name = domain.name if domain else "General Market Analytics"
+    row_count = len(target_df)
+    profile_map = {p.name: p for p in target_profiles}
 
-    # 1. Gate: Strictly discover valid competitive entity columns
-    candidate_entities: List[Tuple[str, str, float]] = []
-    for col in df.columns:
+    # 1. Gate: Verify if target dataset contains external market competitor columns
+    competitor_col = None
+    for col in target_df.columns:
         if col not in profile_map:
             continue
         p = profile_map[col]
-        entity_res = _detect_valid_competitive_entity(col, p, row_count, domain_id)
-        if entity_res:
-            entity_label, score = entity_res
-            candidate_entities.append((col, entity_label, score))
+        if _is_market_competitor_column(col, p, row_count):
+            competitor_col = col
+            break
 
-    # Sort candidate entities by score
-    candidate_entities.sort(key=lambda x: x[2], reverse=True)
-
-    # If NO genuine competitive entity is present, return the UNAVAILABLE / SETUP STATE
-    if not candidate_entities:
+    # If NO verified market competitor column exists (e.g. internal sales dataset):
+    if not competitor_col:
         return CompetitionIntelligenceResponse(
             dataset_id=dataset_id,
             is_available=False,
-            competition_mode="unavailable",
-            mode_label="Competition Analysis Unavailable",
-            entity_type=None,
-            unavailable_reason="External competition analysis is unavailable for this dataset.",
-            summary_statement="This dataset does not contain verified company, brand or competitor information. We cannot compare your business with other companies using this data alone.",
+            market_data_status="market_data_absent",
+            status_title="Market competition analysis is not available yet.",
+            unavailable_reason="Your current dataset contains internal transaction data, but no verified competitor or market benchmark data.",
+            summary_statement="Your current dataset contains internal transaction data, but no verified competitor or market benchmark data. Upload a market benchmark dataset containing competitor entities and comparable metrics to enable this analysis.",
             missing_requirements=[
-                "Company or Brand column (e.g., 'Brand', 'Company', 'Competitor', 'Manufacturer', or 'Product Brand')",
-                "Comparable performance metrics (e.g., 'Revenue', 'Profit', 'Units Sold', 'Market Share')",
-                "Optional external competitor data or industry benchmarks",
+                "Competitor or Company column (e.g., 'Competitor', 'Company', 'Peer Brand')",
+                "Comparable performance metrics (e.g., 'Revenue', 'Profit Margin', 'Market Share', 'Growth Rate')",
+                "External market scope or competitor-level reporting periods",
             ],
-            required_data_guide=[
-                "To enable Dataset-Based Benchmarking, upload a dataset with a verified 'Brand', 'Company', 'Manufacturer', or 'Product' column.",
-                "For multi-firm competitive intelligence, include records for peer competitors with corresponding performance measures.",
-                "Note: Operational attributes (such as Customer Login Type, Device Type, Demographics, or Regions) represent internal distributions and are excluded from competitive entity benchmarking.",
-            ],
+            required_market_fields=REQUIRED_MARKET_FIELDS_GUIDE,
             domain_id=domain_id,
-            domain_name=domain.name if domain else "General Analytics",
+            domain_name=domain_name,
             currency_symbol=dataset_currency,
-            data_limitations=[
-                "No verified company, brand, or competitor entity column was detected.",
-                "Internal operational distributions (e.g., customer login types, device types) are not evaluated as competitive market entities.",
+            has_external_benchmark=False,
+            benchmark_filename=None,
+            market_limitations=[
+                "Internal Transaction Data Only: The active file tracks internal orders and customer transactions, not external market competitor disclosures.",
+                "Excluded Categories: Customer Login Type, Device Type, Demographics, and Order IDs represent internal operations and are excluded from market competitor analysis.",
             ],
             methodology_notes=[
-                "Entity Verification: Strict entity gating is applied to ensure only genuine commercial brands, firms, suppliers, or teams are benchmarked.",
+                "Market Gating Active: DataScope strictly validates that datasets contain external competitor firms before computing market share or competitor gap dashboards.",
             ],
             analyzed_at=datetime.now(timezone.utc).isoformat(),
         )
 
-    # 2. Mode A: Genuine Entity Detected -> Compute Dataset-Based Benchmarking
-    selected_dimension, entity_type_label, _ = candidate_entities[0]
-    available_dimensions = [c[0] for c in candidate_entities[:5]]
+    # 2. Market Data Detected -> Extract Metrics
+    rev_col = _find_numeric_metric(target_df, target_profiles, ["revenue", "sales", "turnover", "income", "spend", "value"])
+    profit_col = _find_numeric_metric(target_df, target_profiles, ["profit", "net_profit", "operating_profit", "earnings"])
+    share_col = _find_numeric_metric(target_df, target_profiles, ["market_share", "share_pct", "share", "market_pct"])
+    growth_col = _find_numeric_metric(target_df, target_profiles, ["growth", "growth_rate", "yoy_growth", "cagr"])
+    price_col = _find_numeric_metric(target_df, target_profiles, ["price", "avg_price", "pricing", "unit_price", "price_index"])
+    units_col = _find_numeric_metric(target_df, target_profiles, ["units", "quantity", "units_sold", "volume"])
 
-    # 3. Identify Candidate Numeric Metrics
-    metrics = _find_candidate_metrics(df, profiles, domain)
-    if not metrics:
-        selected_metric = "record_count"
-        selected_metric_label = "Observation Count"
-        agg_method = "count"
-        sem_type = "count"
-        available_metrics = ["record_count"]
-    else:
-        selected_metric_tuple = metrics[0]
-        selected_metric = selected_metric_tuple[0]
-        agg_method = selected_metric_tuple[1]
-        sem_type = selected_metric_tuple[2]
-        selected_metric_label = humanize_column_name(selected_metric)
-        available_metrics = [m[0] for m in metrics[:8]]
+    comp_series = target_df[competitor_col].fillna("(Unknown Competitor)").astype(str)
+    unique_competitors = target_df[competitor_col].dropna().unique()
+    total_competitors = len(unique_competitors)
 
-    # 4. Perform Grouped Aggregation
-    dim_series = df[selected_dimension].fillna("(Unspecified)").astype(str)
-    
-    if agg_method == "count":
-        agg_res = df.groupby(dim_series).size().rename("val").reset_index()
-    elif agg_method == "mean":
-        numeric_series = pd.to_numeric(df[selected_metric], errors="coerce")
-        agg_res = df.assign(_metric_val=numeric_series).groupby(dim_series)["_metric_val"].mean().dropna().rename("val").reset_index()
-    else:  # sum
-        numeric_series = pd.to_numeric(df[selected_metric], errors="coerce").fillna(0.0)
-        agg_res = df.assign(_metric_val=numeric_series).groupby(dim_series)["_metric_val"].sum().rename("val").reset_index()
-
-    row_counts = df.groupby(dim_series).size().to_dict()
-
-    if agg_res.empty or len(agg_res) < 2:
+    if total_competitors < 2:
         return CompetitionIntelligenceResponse(
             dataset_id=dataset_id,
             is_available=False,
-            competition_mode="unavailable",
-            mode_label="Competition Analysis Unavailable",
-            unavailable_reason="External competition analysis is unavailable for this dataset.",
-            summary_statement=f"The detected entity column '{humanize_column_name(selected_dimension)}' has fewer than 2 populated entities for comparative benchmarking.",
-            missing_requirements=["At least 2 distinct populated entities in the dataset."],
+            market_data_status="insufficient_data",
+            status_title="Market competition analysis is not available yet.",
+            unavailable_reason=f"The competitor column '{humanize_column_name(competitor_col)}' contains fewer than 2 distinct competitors.",
+            summary_statement="At least 2 distinct competitor entities are required for comparative market analysis.",
+            missing_requirements=["Multiple competitor entities in the market dataset."],
+            required_market_fields=REQUIRED_MARKET_FIELDS_GUIDE,
+            has_external_benchmark=has_benchmark,
+            benchmark_filename=benchmark_filename,
         )
 
-    # Sort descending
-    agg_res = agg_res.sort_values(by="val", ascending=False).reset_index(drop=True)
-    total_segments = len(agg_res)
+    # Primary comparison metric
+    primary_metric_col = rev_col or units_col or profit_col or "record_count"
+    primary_metric_label = humanize_column_name(primary_metric_col) if primary_metric_col != "record_count" else "Reported Records"
+
+    # Aggregate by Competitor
+    competitors: List[CompetitorEntitySchema] = []
     
-    total_sum = agg_res["val"].sum() if agg_res["val"].sum() > 0 and (agg_res["val"] >= 0).all() else None
-    benchmark_avg = float(agg_res["val"].mean())
-    benchmark_med = float(agg_res["val"].median())
+    # Compute totals
+    comp_groups = target_df.groupby(comp_series)
+    rev_by_comp = comp_groups[rev_col].sum() if rev_col else pd.Series(0.0, index=comp_groups.groups.keys())
+    profit_by_comp = comp_groups[profit_col].sum() if profit_col else pd.Series(0.0, index=comp_groups.groups.keys())
+    units_by_comp = comp_groups[units_col].sum() if units_col else pd.Series(0.0, index=comp_groups.groups.keys())
+    growth_by_comp = comp_groups[growth_col].mean() if growth_col else None
+    price_by_comp = comp_groups[price_col].mean() if price_col else None
+    explicit_share = comp_groups[share_col].mean() if share_col else None
 
-    # Build Segments List
-    segments: List[CompetitionSegmentSchema] = []
-    for rank, row in enumerate(agg_res.head(50).itertuples(), start=1):
-        seg_name = str(getattr(row, selected_dimension))
-        seg_val = float(getattr(row, "val"))
-        seg_rc = int(row_counts.get(seg_name, 0))
+    total_market_rev = float(rev_by_comp.sum()) if rev_col and rev_by_comp.sum() > 0 else None
+    
+    # Sort competitors by primary metric (revenue or units or count)
+    sort_series = rev_by_comp if rev_col else (units_by_comp if units_col else comp_groups.size())
+    sorted_comp_names = sort_series.sort_values(ascending=False).index.tolist()
+
+    for rank, comp_name in enumerate(sorted_comp_names, start=1):
+        c_rev = float(rev_by_comp.get(comp_name, 0.0)) if rev_col else None
+        c_profit = float(profit_by_comp.get(comp_name, 0.0)) if profit_col else None
+        c_units = float(units_by_comp.get(comp_name, 0.0)) if units_col else None
+        c_growth = float(growth_by_comp.get(comp_name, 0.0)) if growth_by_comp is not None else None
+        c_price = float(price_by_comp.get(comp_name, 0.0)) if price_by_comp is not None else None
         
-        share_pct = round((seg_val / total_sum) * 100, 2) if total_sum and total_sum > 0 else None
+        # Margin
+        margin_pct = round((c_profit / c_rev) * 100, 1) if (c_profit is not None and c_rev and c_rev > 0) else None
         
-        if rank == 1:
-            status = "top"
-        elif rank == total_segments:
-            status = "bottom"
-        elif seg_val >= benchmark_avg:
-            status = "above_average"
-        elif seg_val < benchmark_avg:
-            status = "below_average"
+        # Share
+        if explicit_share is not None and comp_name in explicit_share:
+            share_pct = round(float(explicit_share[comp_name]), 1)
+        elif total_market_rev and c_rev:
+            share_pct = round((c_rev / total_market_rev) * 100, 1)
         else:
-            status = "average"
-            
-        unit_str = dataset_currency if sem_type == "currency" else ("%" if sem_type == "percentage" else None)
-        fmt_val = format_metric_display(seg_val, unit=unit_str, semantic_type=sem_type)
+            share_pct = None
 
-        segments.append(
-            CompetitionSegmentSchema(
+        rev_fmt = format_metric_display(c_rev, unit=dataset_currency, semantic_type="currency") if c_rev is not None else None
+        profit_fmt = format_metric_display(c_profit, unit=dataset_currency, semantic_type="currency") if c_profit is not None else None
+        units_fmt = format_metric_display(c_units, unit=None, semantic_type="quantity") if c_units is not None else None
+        price_fmt = format_metric_display(c_price, unit=dataset_currency, semantic_type="currency") if c_price is not None else None
+
+        competitors.append(
+            CompetitorEntitySchema(
                 rank=rank,
-                name=seg_name,
-                value=round(seg_val, 2),
-                formatted_value=fmt_val,
-                share_pct=share_pct,
-                record_count=seg_rc,
-                status=status,
+                name=comp_name,
+                revenue=round(c_rev, 2) if c_rev is not None else None,
+                revenue_formatted=rev_fmt,
+                profit=round(c_profit, 2) if c_profit is not None else None,
+                profit_formatted=profit_fmt,
+                profit_margin_pct=margin_pct,
+                market_share_pct=share_pct,
+                units_sold=round(c_units, 2) if c_units is not None else None,
+                units_sold_formatted=units_fmt,
+                growth_rate_pct=round(c_growth, 1) if c_growth is not None else None,
+                pricing_index=round(c_price, 2) if c_price is not None else None,
+                pricing_index_formatted=price_fmt,
+                records_count=int(comp_groups.size().get(comp_name, 0)),
+                status_label="Reported Competitor",
             )
         )
 
-    top_seg = segments[0]
-    bottom_seg = segments[-1]
-    
-    top_val = top_seg.value
-    bottom_val = bottom_seg.value
-    
-    abs_gap = round(top_val - bottom_val, 2)
-    if bottom_val != 0:
-        ratio = round(top_val / bottom_val, 2) if (top_val >= 0 and bottom_val > 0) else round(abs(top_val - bottom_val) / abs(bottom_val) + 1.0, 2)
-        pct_diff = round(((top_val - bottom_val) / abs(bottom_val)) * 100, 1)
-    else:
-        ratio = round(top_val, 2)
-        pct_diff = 100.0
+    leader_comp = competitors[0]
+    trailing_comp = competitors[-1]
+    avg_rev = float(rev_by_comp.mean()) if rev_col else None
+    avg_rev_fmt = format_metric_display(avg_rev, unit=dataset_currency, semantic_type="currency") if avg_rev is not None else None
+    tot_rev_fmt = format_metric_display(total_market_rev, unit=dataset_currency, semantic_type="currency") if total_market_rev is not None else None
 
-    unit_str = dataset_currency if sem_type == "currency" else ("%" if sem_type == "percentage" else None)
-    top_fmt = format_metric_display(top_val, unit=unit_str, semantic_type=sem_type)
-    bottom_fmt = format_metric_display(bottom_val, unit=unit_str, semantic_type=sem_type)
-    avg_fmt = format_metric_display(benchmark_avg, unit=unit_str, semantic_type=sem_type)
-    med_fmt = format_metric_display(benchmark_med, unit=unit_str, semantic_type=sem_type)
-    gap_fmt = format_metric_display(abs_gap, unit=unit_str, semantic_type=sem_type)
-
-    dim_label = humanize_column_name(selected_dimension)
-    
-    # Neutral, evidence-based summary statement
-    summary_stmt = (
-        f"Compared {total_segments} {entity_type_label.lower()} entities in this dataset on {selected_metric_label}. "
-        f"'{top_seg.name}' recorded the highest observed value with {top_fmt}"
-        + (f" ({top_seg.share_pct}% share)" if top_seg.share_pct else "")
-        + f", while '{bottom_seg.name}' recorded {bottom_fmt} (difference of {gap_fmt})."
+    # Overview
+    overview = MarketOverviewSchema(
+        industry_market_name=domain_name,
+        competitor_column=competitor_col,
+        competitor_column_label=humanize_column_name(competitor_col),
+        total_competitors_tracked=total_competitors,
+        total_reported_market_revenue=round(total_market_rev, 2) if total_market_rev else None,
+        total_reported_market_revenue_formatted=tot_rev_fmt,
+        data_coverage_description=f"Tracked {total_competitors} reported competitors in this market dataset.",
+        top_competitor_name=leader_comp.name,
+        top_competitor_metric_value=leader_comp.revenue or leader_comp.units_sold or 0.0,
+        top_competitor_metric_formatted=leader_comp.revenue_formatted or leader_comp.units_sold_formatted or str(leader_comp.records_count),
+        benchmark_average_revenue=round(avg_rev, 2) if avg_rev else None,
+        benchmark_average_revenue_formatted=avg_rev_fmt,
+        primary_metric=primary_metric_col,
+        primary_metric_label=primary_metric_label,
+        summary_statement=(
+            f"Compared {total_competitors} reported competitors in {domain_name}. "
+            f"'{leader_comp.name}' holds the highest reported {primary_metric_label.lower()} "
+            f"({leader_comp.revenue_formatted or leader_comp.units_sold_formatted or str(leader_comp.records_count)})"
+            + (f" representing {leader_comp.market_share_pct}% of tracked volume" if leader_comp.market_share_pct else "")
+            + f", compared to '{trailing_comp.name}' ({trailing_comp.revenue_formatted or trailing_comp.units_sold_formatted or str(trailing_comp.records_count)})."
+        ),
     )
 
-    overview = CompetitionOverviewSchema(
-        comparison_dimension=selected_dimension,
-        comparison_dimension_label=dim_label,
-        entity_type_label=entity_type_label,
-        available_dimensions=available_dimensions,
-        primary_metric=selected_metric,
-        primary_metric_label=selected_metric_label,
-        available_metrics=available_metrics,
-        aggregation_method=agg_method,
-        total_segments=total_segments,
-        top_segment_name=top_seg.name,
-        top_segment_value=top_val,
-        top_segment_formatted=top_fmt,
-        bottom_segment_name=bottom_seg.name,
-        bottom_segment_value=bottom_val,
-        bottom_segment_formatted=bottom_fmt,
-        benchmark_average=round(benchmark_avg, 2),
-        benchmark_average_formatted=avg_fmt,
-        benchmark_median=round(benchmark_med, 2),
-        benchmark_median_formatted=med_fmt,
-        performance_spread_ratio=ratio,
-        summary_statement=summary_stmt,
-    )
-
-    # 5. Build Measurable Performance Gaps with Careful, Objective Language
-    gaps: List[CompetitionGapSchema] = []
+    # 3. Build Factual Competitive Gaps
+    market_gaps: List[MarketGapSchema] = []
     
-    # Gap 1: High vs Low
-    gaps.append(
-        CompetitionGapSchema(
-            title=f"Performance Difference: '{top_seg.name}' vs '{bottom_seg.name}'",
-            gap_type="top_vs_bottom",
-            segment_a=top_seg.name,
-            segment_b=bottom_seg.name,
-            absolute_gap=abs_gap,
-            formatted_absolute_gap=gap_fmt,
-            ratio=ratio,
-            pct_difference=pct_diff,
-            explanation=(
-                f"'{top_seg.name}' recorded a higher value ({top_fmt}) than '{bottom_seg.name}' ({bottom_fmt}) "
-                f"for {selected_metric_label}, resulting in a measurable difference of {gap_fmt}."
-            ),
-            evidence=f"Highest: {top_fmt} | Lowest: {bottom_fmt} | Absolute Delta: {gap_fmt} ({pct_diff:+.1f}%)",
-        )
-    )
-
-    # Gap 2: High vs Cohort Average
-    avg_gap = round(top_val - benchmark_avg, 2)
-    avg_gap_fmt = format_metric_display(avg_gap, unit=unit_str, semantic_type=sem_type)
-    avg_pct_diff = round(((top_val - benchmark_avg) / abs(benchmark_avg)) * 100, 1) if benchmark_avg != 0 else 0.0
-    gaps.append(
-        CompetitionGapSchema(
-            title=f"Cohort Average Comparison: '{top_seg.name}' vs Mean",
-            gap_type="top_vs_average",
-            segment_a=top_seg.name,
-            segment_b=f"Cohort Average ({total_segments} entities)",
-            absolute_gap=avg_gap,
-            formatted_absolute_gap=avg_gap_fmt,
-            ratio=round(top_val / benchmark_avg, 2) if benchmark_avg > 0 else 1.0,
-            pct_difference=avg_pct_diff,
-            explanation=(
-                f"'{top_seg.name}' recorded {top_fmt}, which is {avg_gap_fmt} ({avg_pct_diff:+.1f}%) above "
-                f"the dataset cohort mean of {avg_fmt}."
-            ),
-            evidence=f"Lead Entity: {top_fmt} | Cohort Mean: {avg_fmt} | Variance: {avg_gap_fmt}",
-        )
-    )
-
-    # 6. Objective Areas of Strength & Improvement
-    areas_of_strength = [
-        f"'{top_seg.name}' registered the highest recorded {selected_metric_label} ({top_fmt}) among all {total_segments} compared {entity_type_label.lower()} entities.",
-    ]
-    if len(segments) >= 2:
-        areas_of_strength.append(
-            f"Top 2 {entity_type_label.lower()} entities ('{segments[0].name}' and '{segments[1].name}') account for the majority of total observed {selected_metric_label}."
+    # Revenue Gap (Leader vs Trailing)
+    if rev_col and leader_comp.revenue and trailing_comp.revenue is not None:
+        rev_gap = round(leader_comp.revenue - trailing_comp.revenue, 2)
+        rev_gap_fmt = format_metric_display(rev_gap, unit=dataset_currency, semantic_type="currency")
+        pct_diff = round(((leader_comp.revenue - trailing_comp.revenue) / abs(trailing_comp.revenue)) * 100, 1) if trailing_comp.revenue != 0 else 100.0
+        
+        market_gaps.append(
+            MarketGapSchema(
+                title=f"Reported Revenue Gap: '{leader_comp.name}' vs '{trailing_comp.name}'",
+                gap_type="revenue_gap",
+                metric_name=primary_metric_label,
+                leader_entity=leader_comp.name,
+                trailing_entity=trailing_comp.name,
+                absolute_difference=rev_gap,
+                formatted_difference=rev_gap_fmt,
+                pct_difference=pct_diff,
+                factual_statement=(
+                    f"'{leader_comp.name}' reported {leader_comp.revenue_formatted} in revenue, "
+                    f"which is {rev_gap_fmt} (+{pct_diff}%) higher than '{trailing_comp.name}' ({trailing_comp.revenue_formatted})."
+                ),
+                evidence=f"Leader: {leader_comp.revenue_formatted} | Lowest: {trailing_comp.revenue_formatted} | Delta: {rev_gap_fmt}",
+            )
         )
 
-    areas_for_improvement = [
-        f"Trailing entity '{bottom_seg.name}' registered {bottom_fmt}, lagging the cohort average ({avg_fmt}) by {format_metric_display(abs(bottom_val - benchmark_avg), unit=unit_str, semantic_type=sem_type)}.",
-        f"Examine underlying operational factors contributing to the {ratio}x performance variance between top and bottom {entity_type_label.lower()} entities.",
-    ]
+    # Profit Margin Gap
+    if profit_col and len(competitors) >= 2:
+        valid_margins = [c for c in competitors if c.profit_margin_pct is not None]
+        if len(valid_margins) >= 2:
+            highest_margin_comp = max(valid_margins, key=lambda x: x.profit_margin_pct or -999)
+            lowest_margin_comp = min(valid_margins, key=lambda x: x.profit_margin_pct or 999)
+            margin_gap = round((highest_margin_comp.profit_margin_pct or 0.0) - (lowest_margin_comp.profit_margin_pct or 0.0), 1)
+            
+            market_gaps.append(
+                MarketGapSchema(
+                    title=f"Operating Profit Margin Gap: '{highest_margin_comp.name}' vs '{lowest_margin_comp.name}'",
+                    gap_type="margin_gap",
+                    metric_name="Profit Margin %",
+                    leader_entity=highest_margin_comp.name,
+                    trailing_entity=lowest_margin_comp.name,
+                    absolute_difference=margin_gap,
+                    formatted_difference=f"{margin_gap:+.1f}% pts",
+                    pct_difference=margin_gap,
+                    factual_statement=(
+                        f"'{highest_margin_comp.name}' achieved a profit margin of {highest_margin_comp.profit_margin_pct}%, "
+                        f"leading '{lowest_margin_comp.name}' ({lowest_margin_comp.profit_margin_pct}%) by {margin_gap:.1f} percentage points."
+                    ),
+                    evidence=f"Highest Margin: {highest_margin_comp.profit_margin_pct}% | Lowest Margin: {lowest_margin_comp.profit_margin_pct}%",
+                )
+            )
 
-    # 7. Time-Based Longitudinal Comparison (if date column exists)
+    # 4. Strategic Recommendations / Actionable Opportunities
+    strategic_recs: List[MarketStrategyRecommendationSchema] = []
+
+    if rev_col and leader_comp.revenue and len(competitors) >= 2:
+        strategic_recs.append(
+            MarketStrategyRecommendationSchema(
+                title="Evaluate Revenue Growth Opportunities Against Market Leader",
+                category="growth_expansion",
+                priority="high",
+                metric=primary_metric_label,
+                comparison=f"Leader '{leader_comp.name}' generated {leader_comp.revenue_formatted} vs cohort average of {avg_rev_fmt}.",
+                evidence=f"Leader revenue: {leader_comp.revenue_formatted} ({leader_comp.market_share_pct or 'N/A'}% reported share).",
+                suggested_investigation="Review product lines, regional distribution, and sales channel mix to identify specific volume or expansion gaps.",
+                limitation="External market factors not captured in this dataset (e.g. ad spend, offline channels) may influence competitor revenue.",
+            )
+        )
+
+    if profit_col and len(competitors) >= 2 and any(c.profit_margin_pct is not None for c in competitors):
+        strategic_recs.append(
+            MarketStrategyRecommendationSchema(
+                title="Investigate Cost Structure & Operational Margins",
+                category="cost_efficiency",
+                priority="medium",
+                metric="Operating Margin",
+                comparison="Differences observed in reported competitor profit margins across the dataset.",
+                evidence="Competitor margins range across reported entities.",
+                suggested_investigation="Analyze COGS, supplier contracts, discounting policies, and fulfillment overhead to improve operational margin efficiency.",
+                limitation="Competitor cost accounting methodologies may vary.",
+            )
+        )
+
+    # 5. Time-Series Comparison (if date column exists)
     time_comparison = None
-    date_col = _find_date_column(df, profiles)
-    if date_col and agg_method != "count":
+    date_col = _find_date_column(target_df, target_profiles)
+    if date_col and rev_col:
         try:
-            parsed_dates = pd.to_datetime(df[date_col], errors="coerce")
+            parsed_dates = pd.to_datetime(target_df[date_col], errors="coerce")
             valid_mask = parsed_dates.notna()
-            if valid_mask.sum() >= 10:
-                df_timed = df[valid_mask].copy()
+            if valid_mask.sum() >= 6:
+                df_timed = target_df[valid_mask].copy()
                 df_timed["_parsed_date"] = parsed_dates[valid_mask]
                 
                 date_span_days = (df_timed["_parsed_date"].max() - df_timed["_parsed_date"].min()).days
@@ -574,86 +655,78 @@ def compute_competition_intelligence(
                     
                 periods = sorted(df_timed["_period"].unique())
                 if len(periods) >= 2:
-                    top_5_names = [s.name for s in segments[:5]]
-                    df_top5 = df_timed[df_timed[selected_dimension].astype(str).isin(top_5_names)]
-                    
-                    if agg_method == "mean":
-                        p_agg = df_top5.groupby(["_period", df_top5[selected_dimension].astype(str)])[selected_metric].mean().unstack(fill_value=0.0)
-                    else:
-                        p_agg = df_top5.groupby(["_period", df_top5[selected_dimension].astype(str)])[selected_metric].sum().unstack(fill_value=0.0)
+                    top_names = [c.name for c in competitors[:5]]
+                    df_top = df_timed[df_timed[competitor_col].astype(str).isin(top_names)]
+                    p_agg = df_top.groupby(["_period", df_top[competitor_col].astype(str)])[rev_col].sum().unstack(fill_value=0.0)
 
                     segment_series = []
                     growth_rates = {}
-                    for s_name in top_5_names:
-                        if s_name in p_agg.columns:
-                            vals = [round(float(v), 2) for v in p_agg[s_name].values]
-                            segment_series.append({"segment": s_name, "values": vals})
-                            
+                    for c_name in top_names:
+                        if c_name in p_agg.columns:
+                            vals = [round(float(v), 2) for v in p_agg[c_name].values]
+                            segment_series.append({"segment": c_name, "values": vals})
                             non_zeros = [(idx, v) for idx, v in enumerate(vals) if v > 0]
                             if len(non_zeros) >= 2:
                                 first_val = non_zeros[0][1]
                                 last_val = non_zeros[-1][1]
                                 gr = round(((last_val - first_val) / first_val) * 100, 1)
-                                growth_rates[s_name] = gr
+                                growth_rates[c_name] = gr
 
-                    fastest_seg = max(growth_rates.items(), key=lambda x: x[1]) if growth_rates else None
-                    slowest_seg = min(growth_rates.items(), key=lambda x: x[1]) if growth_rates else None
+                    fastest = max(growth_rates.items(), key=lambda x: x[1]) if growth_rates else None
+                    slowest = min(growth_rates.items(), key=lambda x: x[1]) if growth_rates else None
                     
-                    time_summary = (
-                        f"Tracked longitudinal trajectory for top {entity_type_label.lower()} entities across {len(periods)} {gran.lower()} periods. "
-                        + (f"'{fastest_seg[0]}' exhibited the fastest growth ({fastest_seg[1]:+.1f}%)." if fastest_seg else "")
-                    )
-
                     time_comparison = CompetitionTimeComparisonSchema(
                         is_available=True,
                         time_column=date_col,
                         granularity=gran,
                         period_labels=periods,
                         segment_series=segment_series,
-                        fastest_growing=fastest_seg[0] if fastest_seg else None,
-                        fastest_growing_rate=fastest_seg[1] if fastest_seg else None,
-                        most_declining=slowest_seg[0] if slowest_seg else None,
-                        most_declining_rate=slowest_seg[1] if slowest_seg else None,
-                        summary=time_summary,
+                        fastest_growing=fastest[0] if fastest else None,
+                        fastest_growing_rate=fastest[1] if fastest else None,
+                        most_declining=slowest[0] if slowest else None,
+                        most_declining_rate=slowest[1] if slowest else None,
+                        summary=f"Tracked competitor revenue over {len(periods)} {gran.lower()} periods.",
                     )
         except Exception as e:
-            logger.debug("Time-based competitive comparison encountered non-fatal error: %s", e)
+            logger.debug("Competitor time comparison encountered error: %s", e)
             time_comparison = None
 
     if not time_comparison:
         time_comparison = CompetitionTimeComparisonSchema(
             is_available=False,
-            summary="Longitudinal trajectory unavailable (no chronological date column detected). Analysis reflects cross-sectional benchmarking.",
+            summary="Period-over-period market growth analysis is unavailable (no chronological date column detected).",
         )
 
     limitations = [
-        "Dataset-Based Benchmarking Only: Comparisons reflect relative values exclusively within the uploaded dataset and do not represent external market share or industry totals.",
-        "Sample Representation: Aggregates depend on the completeness of entity records in this specific file.",
-        "Neutral Measurement: High or low recorded values reflect observed numbers and do not imply external market leadership or customer preference without verified source data.",
+        "Tracked Competitors Only: Market share and volume rankings reflect only the competitors included in this uploaded dataset.",
+        "Internal Data Consistency: Figures are based strictly on reported values and do not constitute certified global market audits.",
+        "No Causal Guarantees: Strategic recommendations highlight observed metric gaps; business improvements require holistic market investigation.",
     ]
 
     methodology = [
-        f"Benchmarked Entity: '{selected_dimension}' ({dim_label}) with {total_segments} discrete {entity_type_label.lower()} entities.",
-        f"Compared Metric: '{selected_metric}' ({selected_metric_label}) aggregated via {agg_method.upper()}.",
-        "Entity Verification: Validated as a commercial brand/company/entity column before comparison.",
+        f"Competitor Entity: '{competitor_col}' ({humanize_column_name(competitor_col)}) with {total_competitors} distinct market entities.",
+        f"Primary Measure: '{primary_metric_col}' ({primary_metric_label}).",
+        "Market Share Calculation: Computed as (Competitor Revenue / Total Tracked Market Revenue) * 100.",
     ]
 
     return CompetitionIntelligenceResponse(
         dataset_id=dataset_id,
         is_available=True,
-        competition_mode="internal_benchmarking",
-        mode_label="Dataset-Based Benchmarking",
-        entity_type=entity_type_label,
+        market_data_status="market_data_detected",
+        status_title="Market Competition Analysis",
         domain_id=domain_id,
-        domain_name=domain.name if domain else "General Analytics",
+        domain_name=domain_name,
         currency_symbol=dataset_currency,
+        has_external_benchmark=has_benchmark,
+        benchmark_filename=benchmark_filename,
         overview=overview,
-        segments=segments,
-        gaps=gaps,
-        areas_of_strength=areas_of_strength,
-        areas_for_improvement=areas_for_improvement,
+        competitors=competitors,
+        market_gaps=market_gaps,
+        strategic_recommendations=strategic_recs,
         time_comparison=time_comparison,
-        data_limitations=limitations,
+        missing_requirements=[],
+        required_market_fields=REQUIRED_MARKET_FIELDS_GUIDE,
+        market_limitations=limitations,
         methodology_notes=methodology,
         analyzed_at=datetime.now(timezone.utc).isoformat(),
     )

@@ -66,7 +66,29 @@ def parse_tabular_file(
             raise UnreadableFileError(
                 f"The Excel file could not be parsed: {type(exc).__name__} - {str(exc)}"
             ) from exc
-    elif file_type == "csv":
+    elif file_type == "json":
+        try:
+            import json
+            text = contents.decode("utf-8-sig", errors="replace")
+            json_obj = json.loads(text)
+            if isinstance(json_obj, list):
+                df = pd.DataFrame(json_obj)
+            elif isinstance(json_obj, dict):
+                # Look for array key like "data", "records", "companies", "competitors", "rows"
+                candidate_key = next((k for k in ["data", "records", "companies", "competitors", "rows", "items"] if isinstance(json_obj.get(k), list)), None)
+                if candidate_key:
+                    df = pd.DataFrame(json_obj[candidate_key])
+                else:
+                    df = pd.DataFrame(json_obj)
+            else:
+                raise ValueError("JSON content must be an array of records or a valid data dictionary.")
+            diagnostics.encoding_used = "utf-8"
+            diagnostics.delimiter_used = "json"
+        except Exception as exc:
+            raise UnreadableFileError(
+                f"The JSON file could not be parsed: {type(exc).__name__} - {str(exc)}"
+            ) from exc
+    elif file_type in ("csv", "tsv", "txt"):
         df, diag = _read_csv_with_fallback(contents)
         diagnostics = diag
     else:

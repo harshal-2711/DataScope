@@ -31,7 +31,10 @@ from app.schemas.domain_blueprint import DomainIdentitySchema
 from app.services.analysis_validator import run_analysis_quality_check
 from app.services.chart_engine import generate_domain_charts
 from app.services.column_profiler import profile_dataset
-from app.services.competition_engine import compute_competition_intelligence
+from app.services.competition_engine import (
+    compute_competition_intelligence,
+    validate_and_preview_benchmark,
+)
 from app.services.comparison_engine import compute_comparisons
 from app.services.domain_detector import detect_domain
 from app.services.entity_detector import detect_entities
@@ -44,6 +47,7 @@ from app.services.recommendation_engine import (
     generate_recommendations,
     rank_columns,
 )
+from app.services.recommendations_intelligence_engine import compute_recommendations_intelligence
 from app.services.risk_engine import compute_full_risk_intelligence, detect_risks_and_anomalies
 from app.services.sports_cricket_service import (
     compute_cricket_ball_analytics,
@@ -534,10 +538,80 @@ def get_competition_intelligence(dataset_id: str) -> Dict[str, Any]:
         profiles=profiles,
         domain=domain,
         dataset_currency=currency,
+        benchmark_df=entry.benchmark_df,
+        benchmark_filename=entry.benchmark_filename,
     )
     res_dict = res.model_dump() if hasattr(res, "model_dump") else res.dict()
     entry.cache["competition_intelligence"] = res_dict
     return res_dict
+
+
+def preview_market_benchmark(
+    dataset_id: str,
+    file_bytes: bytes,
+    filename: str,
+    file_type: str,
+) -> Dict[str, Any]:
+    """Parse benchmark file (CSV/XLSX/JSON) and return schema validation & quality preview without applying."""
+    # Ensure dataset_id exists
+    dataset_store.get_dataset_or_raise(dataset_id)
+    
+    benchmark_df, _ = parse_tabular_file(file_bytes, filename, file_type)
+    res = validate_and_preview_benchmark(benchmark_df, filename)
+    return res.model_dump() if hasattr(res, "model_dump") else res.dict()
+
+
+def apply_market_benchmark(
+    dataset_id: str,
+    file_bytes: bytes,
+    filename: str,
+    file_type: str,
+) -> Dict[str, Any]:
+    """Parse, validate, and attach external market benchmark DataFrame to dataset entry."""
+    entry = dataset_store.get_dataset_or_raise(dataset_id)
+    
+    benchmark_df, _ = parse_tabular_file(file_bytes, filename, file_type)
+    preview = validate_and_preview_benchmark(benchmark_df, filename)
+    if not preview.is_valid:
+        raise UnreadableFileError(f"Market benchmark validation failed: {preview.validation_summary}")
+    
+    dataset_store.attach_benchmark(dataset_id, filename, benchmark_df)
+    return get_competition_intelligence(dataset_id)
+
+
+def remove_market_benchmark(dataset_id: str) -> Dict[str, Any]:
+    """Detach external market benchmark DataFrame and restore default competition state."""
+    dataset_store.get_dataset_or_raise(dataset_id)
+    dataset_store.remove_benchmark(dataset_id)
+    return get_competition_intelligence(dataset_id)
+
+
+def get_recommendations_intelligence(dataset_id: str) -> Dict[str, Any]:
+    """Return universal, domain-aware evidence-based strategic recommendations."""
+    entry = dataset_store.get_dataset_or_raise(dataset_id)
+    if "recommendations_intelligence" in entry.cache:
+        return entry.cache["recommendations_intelligence"]
+
+    profiles = entry.cache.get("profiles") or profile_dataset(entry.df)
+    entry.cache["profiles"] = profiles
+    domain = entry.cache.get("domain") or detect_domain(entry.df, profiles)
+    entry.cache["domain"] = domain
+    currency = detect_dataset_currency(entry.df)
+
+    res = compute_recommendations_intelligence(
+        df=entry.df,
+        dataset_id=dataset_id,
+        profiles=profiles,
+        domain=domain,
+        dataset_currency=currency,
+        benchmark_df=entry.benchmark_df,
+        benchmark_filename=entry.benchmark_filename,
+    )
+    res_dict = res.model_dump() if hasattr(res, "model_dump") else res.dict()
+    entry.cache["recommendations_intelligence"] = res_dict
+    return res_dict
+
+
 
 
 

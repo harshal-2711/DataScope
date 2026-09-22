@@ -284,4 +284,93 @@ export async function fetchCompetitionIntelligence(
   return data
 }
 
+export async function previewMarketBenchmark(
+  datasetId: string,
+  file: File
+): Promise<import("@/types/intelligence").MarketBenchmarkPreview> {
+  const formData = new FormData()
+  formData.append("file", file)
+
+  const res = await safeFetch(
+    `${API_BASE_URL}/api/dataset/${encodeURIComponent(datasetId)}/benchmark/preview`,
+    {
+      method: "POST",
+      body: formData,
+    },
+    "market benchmark preview"
+  )
+
+  return unwrapOrThrow<import("@/types/intelligence").MarketBenchmarkPreview>(
+    res,
+    "Could not validate the benchmark file."
+  )
+}
+
+export async function applyMarketBenchmark(
+  datasetId: string,
+  file: File
+): Promise<import("@/types/intelligence").CompetitionIntelligenceResponse> {
+  const formData = new FormData()
+  formData.append("file", file)
+
+  const res = await safeFetch(
+    `${API_BASE_URL}/api/dataset/${encodeURIComponent(datasetId)}/benchmark/apply`,
+    {
+      method: "POST",
+      body: formData,
+    },
+    "market benchmark apply"
+  )
+
+  const data = await unwrapOrThrow<import("@/types/intelligence").CompetitionIntelligenceResponse>(
+    res,
+    "Could not apply the benchmark file."
+  )
+  clearClientApiCache(datasetId)
+  return data
+}
+
+export async function removeMarketBenchmark(
+  datasetId: string
+): Promise<import("@/types/intelligence").CompetitionIntelligenceResponse> {
+  const res = await safeFetch(
+    `${API_BASE_URL}/api/dataset/${encodeURIComponent(datasetId)}/benchmark`,
+    {
+      method: "DELETE",
+    },
+    "market benchmark remove"
+  )
+
+  const data = await unwrapOrThrow<import("@/types/intelligence").CompetitionIntelligenceResponse>(
+    res,
+    "Could not remove the benchmark."
+  )
+  clearClientApiCache(datasetId)
+  return data
+}
+
+export async function fetchRecommendationsIntelligence(
+  datasetId: string
+): Promise<import("@/types/intelligence").RecommendationsIntelligenceResponse> {
+  const cacheKey = `${datasetId}_recommendations_intelligence`
+  if (apiCache.has(cacheKey)) {
+    return apiCache.get(cacheKey)
+  }
+
+  const res = await safeFetch(
+    `${API_BASE_URL}/api/dataset/${encodeURIComponent(datasetId)}/recommendations_intelligence`,
+    undefined,
+    "recommendations intelligence"
+  )
+
+  const data = await unwrapOrThrow<import("@/types/intelligence").RecommendationsIntelligenceResponse>(
+    res,
+    "Evidence-based recommendations could not be generated for this dataset."
+  )
+  apiCache.set(cacheKey, data)
+  return data
+}
+
+
+
 

@@ -21,6 +21,7 @@ class Settings:
         ".csv": "csv",
         ".xlsx": "xlsx",
         ".xls": "xls",
+        ".json": "json",
     }
     PREVIEW_ROW_COUNT: int = 10
 

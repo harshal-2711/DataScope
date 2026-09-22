@@ -122,7 +122,11 @@ export default function Competition() {
             <DomainHeader domain={intelState.data.domain} />
           )}
 
-          <CompetitionViewer data={compData} />
+          <CompetitionViewer
+            data={compData}
+            datasetId={activeDataset.dataset_id}
+            onBenchmarkUpdated={(updated) => setCompData(updated)}
+          />
         </div>
       ) : null}
     </div>

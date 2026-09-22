@@ -13,6 +13,8 @@ from app.schemas.domain_blueprint import (
     DecisionDashboardResponse,
     DomainIntelligenceResponse,
     ForecastResponse,
+    MarketBenchmarkPreviewResponse,
+    RecommendationsIntelligenceResponse,
     RiskIntelligenceResponse,
     TrendsIntelligenceResponse,
 )
@@ -267,7 +269,120 @@ def get_dataset_competition_intelligence(dataset_id: str) -> dict:
             exc.status_code,
             len(dataset_store._store),
         )
+@router.post(
+    "/dataset/{dataset_id}/benchmark/preview",
+    response_model=MarketBenchmarkPreviewResponse,
+)
+async def preview_market_benchmark_file(
+    dataset_id: str,
+    file: UploadFile = File(...),
+) -> dict:
+    """Validate an uploaded market benchmark file and return metadata preview & quality warnings."""
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="No benchmark file was provided.")
+
+    from pathlib import Path
+    from app.core.config import settings
+    ext = Path(file.filename).suffix.lower()
+    if ext not in settings.ALLOWED_EXTENSIONS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported file extension '{ext}'. Allowed: {', '.join(settings.ALLOWED_EXTENSIONS.keys())}.",
+        )
+    file_type = settings.ALLOWED_EXTENSIONS[ext]
+
+    try:
+        contents = await file.read()
+        return dataset_service.preview_market_benchmark(
+            dataset_id=dataset_id,
+            file_bytes=contents,
+            filename=file.filename,
+            file_type=file_type,
+        )
+    except DatasetError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
+
+
+@router.post(
+    "/dataset/{dataset_id}/benchmark/apply",
+    response_model=CompetitionIntelligenceResponse,
+)
+async def apply_market_benchmark_file(
+    dataset_id: str,
+    file: UploadFile = File(...),
+) -> dict:
+    """Validate and attach an external market benchmark dataset to the active session."""
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="No benchmark file was provided.")
+
+    from pathlib import Path
+    from app.core.config import settings
+    ext = Path(file.filename).suffix.lower()
+    if ext not in settings.ALLOWED_EXTENSIONS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported file extension '{ext}'. Allowed: {', '.join(settings.ALLOWED_EXTENSIONS.keys())}.",
+        )
+    file_type = settings.ALLOWED_EXTENSIONS[ext]
+
+    try:
+        contents = await file.read()
+        return dataset_service.apply_market_benchmark(
+            dataset_id=dataset_id,
+            file_bytes=contents,
+            filename=file.filename,
+            file_type=file_type,
+        )
+    except DatasetError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
+
+
+@router.delete(
+    "/dataset/{dataset_id}/benchmark",
+    response_model=CompetitionIntelligenceResponse,
+)
+def remove_market_benchmark_file(dataset_id: str) -> dict:
+    """Detach external market benchmark dataset and restore default competition state."""
+    try:
+        return dataset_service.remove_market_benchmark(dataset_id)
+    except DatasetError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
+
+
+@router.get(
+    "/dataset/{dataset_id}/recommendations_intelligence",
+    response_model=RecommendationsIntelligenceResponse,
+    operation_id="get_dataset_recommendations_intelligence",
+)
+def get_dataset_recommendations_intelligence(dataset_id: str) -> dict:
+    """Return universal, domain-aware evidence-based strategic recommendations."""
+    logger.info("[ROUTE-HIT] GET /api/dataset/%s/recommendations_intelligence received", dataset_id)
+    try:
+        res = dataset_service.get_recommendations_intelligence(dataset_id)
+        logger.info("[ROUTE-SUCCESS] GET /api/dataset/%s/recommendations_intelligence completed", dataset_id)
+        return res
+    except DatasetError as exc:
+        logger.warning(
+            "[APPLICATION-404] Dataset '%s' failed in recommendations endpoint: %s (Status: %d, Store entries: %d)",
+            dataset_id,
+            exc.message,
+            exc.status_code,
+            len(dataset_store._store),
+        )
+        raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
+
+
+@router.get(
+    "/dataset/{dataset_id}/recommendations-intelligence",
+    response_model=RecommendationsIntelligenceResponse,
+    operation_id="get_dataset_recommendations_intelligence_alias",
+)
+def get_dataset_recommendations_intelligence_alias(dataset_id: str) -> dict:
+    """Alias for recommendations_intelligence endpoint."""
+    return get_dataset_recommendations_intelligence(dataset_id)
+
+
+
 
 
 

@@ -34,6 +34,9 @@ class StoredDataset:
     df: pd.DataFrame
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     cache: dict[str, Any] = field(default_factory=dict)
+    benchmark_df: Optional[pd.DataFrame] = None
+    benchmark_filename: Optional[str] = None
+    benchmark_created_at: Optional[datetime] = None
 
 
 class DatasetStore:
@@ -60,6 +63,31 @@ class DatasetStore:
     def get(self, dataset_id: str) -> StoredDataset | None:
         with self._lock:
             return self._entries.get(dataset_id)
+
+    def attach_benchmark(self, dataset_id: str, benchmark_filename: str, benchmark_df: pd.DataFrame) -> bool:
+        """Attach a verified external market benchmark DataFrame to an existing dataset entry."""
+        with self._lock:
+            entry = self._entries.get(dataset_id)
+            if not entry:
+                return False
+            entry.benchmark_df = benchmark_df
+            entry.benchmark_filename = benchmark_filename
+            entry.benchmark_created_at = datetime.now(timezone.utc)
+            # Invalidate competition intelligence cache
+            entry.cache.pop("competition_intelligence", None)
+            return True
+
+    def remove_benchmark(self, dataset_id: str) -> bool:
+        """Detach external benchmark DataFrame from dataset entry."""
+        with self._lock:
+            entry = self._entries.get(dataset_id)
+            if not entry:
+                return False
+            entry.benchmark_df = None
+            entry.benchmark_filename = None
+            entry.benchmark_created_at = None
+            entry.cache.pop("competition_intelligence", None)
+            return True
 
     def __len__(self) -> int:  # pragma: no cover - convenience only
         return len(self._entries)
@@ -89,6 +117,16 @@ def get_dataset_or_raise(dataset_id: str) -> StoredDataset:
             "uploading the file again."
         )
     return entry
+
+
+def attach_benchmark(dataset_id: str, filename: str, df: pd.DataFrame) -> bool:
+    """Attach benchmark DataFrame to the stored dataset entry."""
+    return _store.attach_benchmark(dataset_id, filename, df)
+
+
+def remove_benchmark(dataset_id: str) -> bool:
+    """Remove attached benchmark DataFrame from the stored dataset entry."""
+    return _store.remove_benchmark(dataset_id)
 
 
 def _debug_snapshot() -> dict[str, Any]:  # pragma: no cover - debugging aid
