@@ -90,14 +90,54 @@ export interface TrendItem {
 
 export interface RiskItem {
   risk_id: string
+  title?: string
   category: string
-  label: "Potential anomaly" | "Requires investigation" | "Unusual pattern detected"
+  label: "Potential anomaly" | "Requires investigation" | "Unusual pattern detected" | string
   description: string
   severity: "low" | "medium" | "high"
-  affected_column: string | null
+  severity_reason?: string
+  affected_metric?: string | null
+  affected_column?: string | null
+  current_value?: number | null
+  current_value_formatted?: string | null
+  previous_value?: number | null
+  previous_value_formatted?: string | null
+  absolute_change?: number | null
+  absolute_change_formatted?: string | null
+  pct_change?: number | null
+  unit?: string | null
+  time_period?: string | null
   evidence: string
+  confidence?: number
+  qualification?: string | null
   recommended_action: string
+  risk_type?: string
+  time_series_preview?: Array<{ period: string; value: number }>
 }
+
+export interface RiskOverview {
+  total_risks: number
+  high_count: number
+  medium_count: number
+  low_count: number
+  most_significant_risk?: RiskItem | null
+  data_quality_warnings_count: number
+  health_status: "Healthy" | "Attention Required" | "Critical Risks Identified"
+  summary_statement: string
+}
+
+export interface RiskIntelligenceResponse {
+  dataset_id: string
+  domain_id: string
+  domain_name: string
+  overview: RiskOverview
+  risks: RiskItem[]
+  categories: string[]
+  affected_metrics: string[]
+  has_time_dimension: boolean
+  data_safety_notes: string[]
+}
+
 
 export interface RecommendationItem {
   rec_id: string

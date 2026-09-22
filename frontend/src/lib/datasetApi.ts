@@ -239,3 +239,26 @@ export async function fetchDataQualityReport(
   apiCache.set(cacheKey, data)
   return data
 }
+
+export async function fetchRiskIntelligence(
+  datasetId: string
+): Promise<import("@/types/intelligence").RiskIntelligenceResponse> {
+  const cacheKey = `${datasetId}_risk`
+  if (apiCache.has(cacheKey)) {
+    return apiCache.get(cacheKey)
+  }
+
+  const res = await safeFetch(
+    `${API_BASE_URL}/api/dataset/${encodeURIComponent(datasetId)}/risk`,
+    undefined,
+    "risk intelligence"
+  )
+
+  const data = await unwrapOrThrow<import("@/types/intelligence").RiskIntelligenceResponse>(
+    res,
+    "Risk intelligence could not be generated for this dataset."
+  )
+  apiCache.set(cacheKey, data)
+  return data
+}
+

@@ -11,6 +11,7 @@ from app.schemas.domain_blueprint import (
     DecisionDashboardResponse,
     DomainIntelligenceResponse,
     ForecastResponse,
+    RiskIntelligenceResponse,
     TrendsIntelligenceResponse,
 )
 from app.services import dataset_service
@@ -218,4 +219,17 @@ def get_dataset_data_quality(dataset_id: str) -> dict:
         return dataset_service.get_data_quality_report(dataset_id)
     except DatasetError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
+
+
+@router.get(
+    "/dataset/{dataset_id}/risk",
+    response_model=RiskIntelligenceResponse,
+)
+def get_dataset_risk_intelligence(dataset_id: str) -> dict:
+    """Return universal, domain-aware risk intelligence and statistical anomaly detections."""
+    try:
+        return dataset_service.get_risk_intelligence(dataset_id)
+    except DatasetError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
+
 

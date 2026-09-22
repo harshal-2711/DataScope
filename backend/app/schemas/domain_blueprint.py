@@ -90,13 +90,53 @@ class TrendItemSchema(BaseModel):
 
 class RiskItemSchema(BaseModel):
     risk_id: str
+    title: str = "Potential Risk"
     category: str
-    label: str = "Potential anomaly"  # Neutral wording: "Potential anomaly", "Requires investigation", "Unusual pattern detected"
+    label: str = "Potential anomaly"  # "Potential anomaly", "Requires investigation", "Unusual pattern detected"
     description: str
     severity: Literal["low", "medium", "high"] = "medium"
+    severity_reason: str = ""
+    affected_metric: Optional[str] = None
     affected_column: Optional[str] = None
+    current_value: Optional[float] = None
+    current_value_formatted: Optional[str] = None
+    previous_value: Optional[float] = None
+    previous_value_formatted: Optional[str] = None
+    absolute_change: Optional[float] = None
+    absolute_change_formatted: Optional[str] = None
+    pct_change: Optional[float] = None
+    unit: Optional[str] = None
+    time_period: Optional[str] = None
     evidence: str = ""
+    confidence: float = 0.90
+    qualification: Optional[str] = None
     recommended_action: str = ""
+    risk_type: str = "general"
+    time_series_preview: List[Dict[str, Any]] = Field(default_factory=list)
+
+
+class RiskOverviewSchema(BaseModel):
+    total_risks: int = 0
+    high_count: int = 0
+    medium_count: int = 0
+    low_count: int = 0
+    most_significant_risk: Optional[RiskItemSchema] = None
+    data_quality_warnings_count: int = 0
+    health_status: Literal["Healthy", "Attention Required", "Critical Risks Identified"] = "Healthy"
+    summary_statement: str = ""
+
+
+class RiskIntelligenceResponse(BaseModel):
+    dataset_id: str
+    domain_id: str
+    domain_name: str
+    overview: RiskOverviewSchema
+    risks: List[RiskItemSchema] = Field(default_factory=list)
+    categories: List[str] = Field(default_factory=list)
+    affected_metrics: List[str] = Field(default_factory=list)
+    has_time_dimension: bool = False
+    data_safety_notes: List[str] = Field(default_factory=list)
+
 
 
 class RecommendationItemSchema(BaseModel):

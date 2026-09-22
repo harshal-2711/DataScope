@@ -43,7 +43,7 @@ from app.services.recommendation_engine import (
     generate_recommendations,
     rank_columns,
 )
-from app.services.risk_engine import detect_risks_and_anomalies
+from app.services.risk_engine import compute_full_risk_intelligence, detect_risks_and_anomalies
 from app.services.sports_cricket_service import (
     compute_cricket_ball_analytics,
     compute_cricket_match_analytics,
@@ -299,7 +299,9 @@ def get_domain_intelligence(dataset_id: str) -> Dict[str, Any]:
     trends = compute_trends(df, capabilities.trends)
 
     # 9. Detect Statistical Risks & Anomalies
-    risks = detect_risks_and_anomalies(df, profiles, capabilities.risks)
+    currency = detect_dataset_currency(df)
+    risk_intel = compute_full_risk_intelligence(df, dataset_id, profiles, domain, dataset_currency=currency)
+    risks = risk_intel.risks
 
     # 10. Synthesize Evidence-based Recommendations
     recommendations = generate_evidence_based_recommendations(
@@ -487,4 +489,29 @@ def get_data_quality_report(dataset_id: str) -> Dict[str, Any]:
     res_dict = rep.model_dump() if hasattr(rep, "model_dump") else rep.dict()
     entry.cache["data_quality"] = res_dict
     return res_dict
+
+
+def get_risk_intelligence(dataset_id: str) -> Dict[str, Any]:
+    """Return comprehensive domain-aware risk intelligence for a stored dataset."""
+    entry = dataset_store.get_dataset_or_raise(dataset_id)
+    if "risk_intelligence" in entry.cache:
+        return entry.cache["risk_intelligence"]
+
+    profiles = entry.cache.get("profiles") or profile_dataset(entry.df)
+    entry.cache["profiles"] = profiles
+    domain = entry.cache.get("domain") or detect_domain(entry.df, profiles)
+    entry.cache["domain"] = domain
+    currency = detect_dataset_currency(entry.df)
+
+    res = compute_full_risk_intelligence(
+        df=entry.df,
+        dataset_id=dataset_id,
+        profiles=profiles,
+        domain=domain,
+        dataset_currency=currency,
+    )
+    res_dict = res.model_dump() if hasattr(res, "model_dump") else res.dict()
+    entry.cache["risk_intelligence"] = res_dict
+    return res_dict
+
 
