@@ -100,34 +100,62 @@ export async function fetchDrilldown(
   )
 }
 
+const apiCache = new Map<string, any>()
+
+export function clearClientApiCache(datasetId?: string) {
+  if (datasetId) {
+    for (const key of Array.from(apiCache.keys())) {
+      if (key.startsWith(datasetId)) {
+        apiCache.delete(key)
+      }
+    }
+  } else {
+    apiCache.clear()
+  }
+}
+
 export async function fetchDomainIntelligence(
   datasetId: string
 ): Promise<import("@/types/intelligence").DomainIntelligenceResponse> {
+  const cacheKey = `${datasetId}_intelligence`
+  if (apiCache.has(cacheKey)) {
+    return apiCache.get(cacheKey)
+  }
+
   const res = await safeFetch(
     `${API_BASE_URL}/api/dataset/${encodeURIComponent(datasetId)}/intelligence`,
     undefined,
     "domain intelligence"
   )
 
-  return unwrapOrThrow<import("@/types/intelligence").DomainIntelligenceResponse>(
+  const data = await unwrapOrThrow<import("@/types/intelligence").DomainIntelligenceResponse>(
     res,
     "Domain intelligence could not be generated for this dataset."
   )
+  apiCache.set(cacheKey, data)
+  return data
 }
 
 export async function fetchDecisionDashboard(
   datasetId: string
 ): Promise<import("@/types/intelligence").DecisionDashboardResponse> {
+  const cacheKey = `${datasetId}_decision_dashboard`
+  if (apiCache.has(cacheKey)) {
+    return apiCache.get(cacheKey)
+  }
+
   const res = await safeFetch(
     `${API_BASE_URL}/api/dataset/${encodeURIComponent(datasetId)}/decision_dashboard`,
     undefined,
     "decision dashboard"
   )
 
-  return unwrapOrThrow<import("@/types/intelligence").DecisionDashboardResponse>(
+  const data = await unwrapOrThrow<import("@/types/intelligence").DecisionDashboardResponse>(
     res,
     "Decision dashboard could not be generated for this dataset."
   )
+  apiCache.set(cacheKey, data)
+  return data
 }
 
 export async function fetchTrendsIntelligence(
@@ -136,6 +164,11 @@ export async function fetchTrendsIntelligence(
   metric?: string,
   categoryCol?: string
 ): Promise<import("@/types/intelligence").TrendsIntelligenceResponse> {
+  const cacheKey = `${datasetId}_trends_${granularity}_${metric || ""}_${categoryCol || ""}`
+  if (apiCache.has(cacheKey)) {
+    return apiCache.get(cacheKey)
+  }
+
   const params = new URLSearchParams({ granularity })
   if (metric) params.append("metric", metric)
   if (categoryCol) params.append("category_col", categoryCol)
@@ -146,21 +179,30 @@ export async function fetchTrendsIntelligence(
     "trends intelligence"
   )
 
-  return unwrapOrThrow<import("@/types/intelligence").TrendsIntelligenceResponse>(
+  const data = await unwrapOrThrow<import("@/types/intelligence").TrendsIntelligenceResponse>(
     res,
     "Trends intelligence could not be generated for this dataset."
   )
+  apiCache.set(cacheKey, data)
+  return data
 }
 
 export async function fetchForecast(
   datasetId: string,
-  horizon: number = 6,
+  horizon: number = 7,
   metric?: string,
-  granularity?: string
+  granularity?: string,
+  method?: string
 ): Promise<import("@/types/intelligence").ForecastResponse> {
+  const cacheKey = `${datasetId}_forecast_${horizon}_${metric || ""}_${granularity || ""}_${method || ""}`
+  if (apiCache.has(cacheKey)) {
+    return apiCache.get(cacheKey)
+  }
+
   const params = new URLSearchParams({ horizon: String(horizon) })
   if (metric) params.append("metric", metric)
   if (granularity) params.append("granularity", granularity)
+  if (method) params.append("method", method)
 
   const res = await safeFetch(
     `${API_BASE_URL}/api/dataset/${encodeURIComponent(datasetId)}/forecast?${params.toString()}`,
@@ -168,23 +210,32 @@ export async function fetchForecast(
     "time-series forecast"
   )
 
-  return unwrapOrThrow<import("@/types/intelligence").ForecastResponse>(
+  const data = await unwrapOrThrow<import("@/types/intelligence").ForecastResponse>(
     res,
     "Forecast could not be generated for this dataset."
   )
+  apiCache.set(cacheKey, data)
+  return data
 }
 
 export async function fetchDataQualityReport(
   datasetId: string
 ): Promise<import("@/types/intelligence").DataQualityReportResponse> {
+  const cacheKey = `${datasetId}_data_quality`
+  if (apiCache.has(cacheKey)) {
+    return apiCache.get(cacheKey)
+  }
+
   const res = await safeFetch(
     `${API_BASE_URL}/api/dataset/${encodeURIComponent(datasetId)}/data_quality`,
     undefined,
     "data quality validation"
   )
 
-  return unwrapOrThrow<import("@/types/intelligence").DataQualityReportResponse>(
+  const data = await unwrapOrThrow<import("@/types/intelligence").DataQualityReportResponse>(
     res,
     "Data quality report could not be generated for this dataset."
   )
+  apiCache.set(cacheKey, data)
+  return data
 }

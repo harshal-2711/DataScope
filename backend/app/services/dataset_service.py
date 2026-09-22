@@ -140,6 +140,7 @@ def build_summary(
     """
     dtypes = {str(col): str(df[col].dtype) for col in df.columns}
     inferred = infer_dataset_types(df)
+    detected_currency = detect_dataset_currency(df)
 
     preview_df = df.head(settings.PREVIEW_ROW_COUNT)
     preview: List[Dict[str, Any]] = json.loads(
@@ -166,6 +167,7 @@ def build_summary(
         "dtypes": dtypes,
         "inferred_columns": [c.to_dict() for c in inferred],
         "diagnostics": diag_dict,
+        "detected_currency": detected_currency,
         "preview": preview,
     }
 
@@ -191,10 +193,13 @@ def process_upload(
 def get_recommendations(dataset_id: str) -> Dict[str, Any]:
     """Profile + auto-generate chart recommendations for a stored dataset."""
     entry = dataset_store.get_dataset_or_raise(dataset_id)
+    if "recommendations" in entry.cache:
+        return entry.cache["recommendations"]
+
     df = entry.df
 
     ranking = rank_columns(df)
-    charts = generate_recommendations(df)
+    charts = generate_recommendations(df, ranking=ranking)
 
     if not charts:
         raise NoChartableColumnsError(
@@ -202,7 +207,7 @@ def get_recommendations(dataset_id: str) -> Dict[str, Any]:
             "(every column is an identifier, empty, or constant)."
         )
 
-    return {
+    res = {
         "dataset_id": dataset_id,
         "chart_count": len(charts),
         "charts": [c.to_dict() for c in charts],
@@ -220,6 +225,8 @@ def get_recommendations(dataset_id: str) -> Dict[str, Any]:
         ],
         "kpis": compute_kpis(df, ranking),
     }
+    entry.cache["recommendations"] = res
+    return res
 
 
 def get_drilldown(
@@ -256,13 +263,18 @@ def get_domain_intelligence(dataset_id: str) -> Dict[str, Any]:
     and evidence-based recommendations.
     """
     entry = dataset_store.get_dataset_or_raise(dataset_id)
+    if "domain_intelligence" in entry.cache:
+        return entry.cache["domain_intelligence"]
+
     df = entry.df
 
     # 1. Profile dataset columns
-    profiles = profile_dataset(df)
+    profiles = entry.cache.get("profiles") or profile_dataset(df)
+    entry.cache["profiles"] = profiles
 
     # 2. Detect Domain Identity
-    domain = detect_domain(df, profiles)
+    domain = entry.cache.get("domain") or detect_domain(df, profiles)
+    entry.cache["domain"] = domain
 
     # 2b. Detect Dataset Grain & Analytical Representation
     dataset_grain = detect_dataset_grain(df)
@@ -351,7 +363,7 @@ def get_domain_intelligence(dataset_id: str) -> Dict[str, Any]:
     def _to_dict(obj: Any) -> Dict[str, Any]:
         return obj.model_dump() if hasattr(obj, "model_dump") else obj.dict()
 
-    return {
+    res = {
         "dataset_id": dataset_id,
         "domain": _to_dict(domain),
         "dataset_grain": dataset_grain.to_dict(),
@@ -368,16 +380,24 @@ def get_domain_intelligence(dataset_id: str) -> Dict[str, Any]:
         "decision_dashboard": _to_dict(decision_dashboard),
         "data_quality_report": _to_dict(data_quality_rep),
     }
+    entry.cache["domain_intelligence"] = res
+    return res
 
 
 def get_decision_dashboard(dataset_id: str) -> Dict[str, Any]:
     """Return real-world, decision-oriented executive dashboard."""
     entry = dataset_store.get_dataset_or_raise(dataset_id)
-    profiles = profile_dataset(entry.df)
-    domain = detect_domain(entry.df, profiles)
+    if "decision_dashboard" in entry.cache:
+        return entry.cache["decision_dashboard"]
+    profiles = entry.cache.get("profiles") or profile_dataset(entry.df)
+    entry.cache["profiles"] = profiles
+    domain = entry.cache.get("domain") or detect_domain(entry.df, profiles)
+    entry.cache["domain"] = domain
     dashboard = generate_decision_dashboard(entry.df, domain, profiles)
     dashboard.dataset_id = dataset_id
-    return dashboard.model_dump() if hasattr(dashboard, "model_dump") else dashboard.dict()
+    res = dashboard.model_dump() if hasattr(dashboard, "model_dump") else dashboard.dict()
+    entry.cache["decision_dashboard"] = res
+    return res
 
 
 def get_validation_report(dataset_id: str) -> Dict[str, Any]:
@@ -389,7 +409,11 @@ def get_validation_report(dataset_id: str) -> Dict[str, Any]:
 def get_universal_statistics(dataset_id: str) -> Dict[str, Any]:
     """Return comprehensive universal descriptive statistics for a dataset."""
     entry = dataset_store.get_dataset_or_raise(dataset_id)
-    return compute_universal_statistics(entry.df)
+    if "universal_statistics" in entry.cache:
+        return entry.cache["universal_statistics"]
+    res = compute_universal_statistics(entry.df)
+    entry.cache["universal_statistics"] = res
+    return res
 
 
 def get_trends_intelligence(
@@ -400,39 +424,67 @@ def get_trends_intelligence(
 ) -> Dict[str, Any]:
     """Return comprehensive time-series trends intelligence with multi-granularity and period comparisons."""
     entry = dataset_store.get_dataset_or_raise(dataset_id)
+    cache_key = f"trends_{granularity}_{metric}_{category_col}"
+    if cache_key in entry.cache:
+        return entry.cache[cache_key]
+
+    profiles = entry.cache.get("profiles") or profile_dataset(entry.df)
+    entry.cache["profiles"] = profiles
+    domain = entry.cache.get("domain") or detect_domain(entry.df, profiles)
+    entry.cache["domain"] = domain
+
     res = compute_trends_intelligence(
         df=entry.df,
         dataset_id=dataset_id,
         granularity=granularity,
         metric=metric,
         category_col=category_col,
+        domain=domain,
     )
-    return res.model_dump() if hasattr(res, "model_dump") else res.dict()
+    res_dict = res.model_dump() if hasattr(res, "model_dump") else res.dict()
+    entry.cache[cache_key] = res_dict
+    return res_dict
 
 
 def get_forecast(
     dataset_id: str,
-    horizon: int = 6,
+    horizon: int = 7,
     metric: Optional[str] = None,
     granularity: Optional[str] = None,
+    method: Optional[str] = "auto",
 ) -> Dict[str, Any]:
     """Return statistical time-series forecast with confidence intervals and limitations."""
     entry = dataset_store.get_dataset_or_raise(dataset_id)
+    cache_key = f"forecast_{horizon}_{metric}_{granularity}_{method}"
+    if cache_key in entry.cache:
+        return entry.cache[cache_key]
+
     res = compute_forecast(
         df=entry.df,
         dataset_id=dataset_id,
         horizon=horizon,
         metric=metric,
         granularity=granularity,
+        method=method,
     )
-    return res.model_dump() if hasattr(res, "model_dump") else res.dict()
+    res_dict = res.model_dump() if hasattr(res, "model_dump") else res.dict()
+    entry.cache[cache_key] = res_dict
+    return res_dict
 
 
 def get_data_quality_report(dataset_id: str) -> Dict[str, Any]:
     """Return comprehensive data quality and hygiene inspection report."""
     entry = dataset_store.get_dataset_or_raise(dataset_id)
-    profiles = profile_dataset(entry.df)
-    domain = detect_domain(entry.df, profiles)
+    if "data_quality" in entry.cache:
+        return entry.cache["data_quality"]
+
+    profiles = entry.cache.get("profiles") or profile_dataset(entry.df)
+    entry.cache["profiles"] = profiles
+    domain = entry.cache.get("domain") or detect_domain(entry.df, profiles)
+    entry.cache["domain"] = domain
+
     rep = compute_data_quality_report(entry.df, dataset_id, domain)
-    return rep.model_dump() if hasattr(rep, "model_dump") else rep.dict()
+    res_dict = rep.model_dump() if hasattr(rep, "model_dump") else rep.dict()
+    entry.cache["data_quality"] = res_dict
+    return res_dict
 

@@ -39,8 +39,10 @@ from app.schemas.domain_blueprint import (
     MetricStatusSchema,
     SectionChartSchema,
 )
+from app.services.column_formatter import detect_column_unit, format_metric_display
 from app.services.column_profiler import ColumnProfile, profile_dataset
 from app.services.semantic_rules import prettify
+from app.services.type_inference import detect_dataset_currency
 
 
 def _clean_num(val: Any, decimals: int = 2) -> Optional[float]:
@@ -55,16 +57,17 @@ def _clean_num(val: Any, decimals: int = 2) -> Optional[float]:
         return None
 
 
-def _format_currency(val: Optional[float]) -> str:
+def _format_currency(val: Optional[float], sym: str = "₹") -> str:
     if val is None:
         return "N/A"
+    s = sym or "₹"
     if abs(val) >= 1_000_000_000:
-        return f"${val / 1_000_000_000:.2f}B"
+        return f"{s}{val / 1_000_000_000:.2f}B"
     if abs(val) >= 1_000_000:
-        return f"${val / 1_000_000:.2f}M"
+        return f"{s}{val / 1_000_000:.2f}M"
     if abs(val) >= 1_000:
-        return f"${val:,.2f}"
-    return f"${val:.2f}"
+        return f"{s}{val:,.2f}"
+    return f"{s}{val:.2f}"
 
 
 def _format_number(val: Optional[float]) -> str:

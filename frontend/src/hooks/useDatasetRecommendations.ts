@@ -8,12 +8,24 @@ type RecommendationsState =
   | { status: "success"; data: RecommendationsResponse }
   | { status: "error"; message: string }
 
+const recommendationsCache = new Map<string, RecommendationsResponse>()
+
 export function useDatasetRecommendations(datasetId: string | null) {
-  const [state, setState] = useState<RecommendationsState>({ status: "idle" })
+  const [state, setState] = useState<RecommendationsState>(() => {
+    if (datasetId && recommendationsCache.has(datasetId)) {
+      return { status: "success", data: recommendationsCache.get(datasetId)! }
+    }
+    return { status: datasetId ? "loading" : "idle" }
+  })
 
   useEffect(() => {
     if (!datasetId) {
       setState({ status: "idle" })
+      return
+    }
+
+    if (recommendationsCache.has(datasetId)) {
+      setState({ status: "success", data: recommendationsCache.get(datasetId)! })
       return
     }
 
@@ -22,6 +34,7 @@ export function useDatasetRecommendations(datasetId: string | null) {
 
     fetchRecommendations(datasetId)
       .then((data) => {
+        recommendationsCache.set(datasetId, data)
         if (!cancelled) setState({ status: "success", data })
       })
       .catch((err) => {

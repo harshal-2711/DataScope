@@ -7,8 +7,9 @@ legends, tooltips, and data previews.
 """
 from __future__ import annotations
 
+import math
 import re
-from typing import Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 # Direct override dictionary for known procurement, finance, and enterprise paths
 _CANONICAL_OVERRIDES = {
@@ -332,3 +333,281 @@ def format_chart_description(
         return f"Compares the average '{pretty_metric}' across distinct '{pretty_dim}' groups.{coverage_note}"
     
     return f"Compares total '{pretty_metric}' grouped by '{pretty_dim}'.{coverage_note}"
+
+
+# --- Unit Detection & Value Formatting ---------------------------------------
+
+_CURRENCY_KEYWORDS = (
+    "price", "cost", "revenue", "sales", "profit", "amount", "budget", "salary",
+    "wage", "fee", "charge", "spend", "expense", "income", "tender_value",
+    "contract_value", "award_value", "freight_value", "freight_cost", "aov", "mrr",
+    "arr", "arpu", "acv", "deal_value", "cpc", "ad_spend", "total_spend", "tax",
+)
+
+_PERCENTAGE_KEYWORDS = (
+    "discount", "discount_rate", "rate", "pct", "percent", "percentage", "margin",
+    "profit_margin", "win_rate", "churn", "churn_rate", "bounce_rate", "tax_rate",
+    "roi", "ctr", "click_through_rate", "conversion_rate", "packet_loss", "cpu_utilization",
+    "cpu_pct", "attrition_rate", "oee", "defects_pct", "otif_rate", "yield_rate",
+    "engagement_rate", "cap_rate", "share", "ratio",
+)
+
+_QUANTITY_KEYWORDS = (
+    "quantity", "qty", "units_sold", "units", "volume", "stock", "inventory",
+    "headcount", "runs", "wickets", "pageviews", "views", "clicks", "impressions",
+    "bugs", "vulnerabilities", "followers", "likes", "shares", "reactions", "violations",
+    "story_points", "points", "goals", "baskets", "assists", "deliveries",
+)
+
+_DURATION_KEYWORDS = (
+    "duration", "duration_in_days", "aging", "aging_days", "order_aging", "lead_time",
+    "transit_time", "resolution_time", "turnaround", "cycle_time", "session_duration",
+    "tenure", "days_on_market", "mttd", "latency", "ping_ms", "hours_spent", "days_to",
+)
+
+_COUNT_KEYWORDS = (
+    "order_id", "orders", "tender_id", "tenders", "bidders", "tenderers", "lead_id",
+    "leads", "patient_id", "patients", "student_id", "students", "employee_id",
+    "employees", "transaction_id", "transactions", "ticket_id", "tickets", "records",
+    "shipment_id", "shipments", "properties", "deals",
+)
+
+
+def detect_column_unit(
+    column_name: Optional[str],
+    series: Optional[Any] = None,
+    domain_id: Optional[str] = None,
+    dataset_currency: Optional[str] = None,
+    series_or_samples: Optional[Any] = None,
+) -> Tuple[str, str, Optional[str]]:
+    """Detect the semantic unit label, semantic type, and currency symbol for any metric/column.
+    
+    Returns:
+        (unit_label, semantic_type, currency_symbol)
+        
+    Examples:
+        "profit" -> ("₹", "currency", "₹") or ("$", "currency", "$")
+        "units_sold" -> ("units", "quantity", None)
+        "discount" -> ("%", "percentage", None)
+        "aging_days" -> ("days", "duration", None)
+        "total_records" -> ("records", "count", None)
+    """
+    if not column_name:
+        return ("units", "number", None)
+
+    col_clean = str(column_name).lower().strip().replace("\\", "/")
+    col_tail = col_clean.split("/")[-1].replace("-", "_").replace(" ", "_")
+    tokens = set(re.findall(r"[a-z0-9]+", col_clean))
+
+    # 1. Currency
+    # Check specific currency code in column name
+    if any(k in col_clean for k in ("_inr", "inr_", "in_inr", "rs_", "_rs", "rupee")) or "inr" in tokens:
+        return ("₹", "currency", "₹")
+    if any(k in col_clean for k in ("_usd", "usd_", "in_usd", "(usd)")) or "usd" in tokens:
+        return ("$", "currency", "$")
+    if any(k in col_clean for k in ("_eur", "eur_", "in_eur", "(eur)")) or "eur" in tokens:
+        return ("€", "currency", "€")
+    if any(k in col_clean for k in ("_gbp", "gbp_", "in_gbp", "(gbp)")) or "gbp" in tokens:
+        return ("£", "currency", "£")
+
+    if any(k in tokens for k in _CURRENCY_KEYWORDS) or any(k in col_tail for k in ("price", "cost", "revenue", "sales", "profit", "amount", "budget", "salary", "spend", "expense", "tender_value", "contract_value", "freight_value", "freight_cost", "total_spend")):
+        sym = dataset_currency or ("₹" if domain_id in ("sports_cricket", "government_procurement") else "₹")
+        return (sym, "currency", sym)
+
+    # 2. Duration / Time first (so duration doesn't trigger ratio)
+    if "ms" in tokens or "latency" in tokens or "ping_ms" in col_clean or "response_time_ms" in col_clean:
+        return ("ms", "duration", None)
+    if "sec" in tokens or "seconds" in tokens or "duration_seconds" in col_clean:
+        return ("s", "duration", None)
+    if "min" in tokens or "mins" in tokens or "minutes" in col_clean:
+        return ("mins", "duration", None)
+    if "hour" in tokens or "hours" in tokens or "hrs" in col_clean:
+        return ("hrs", "duration", None)
+    if "day" in tokens or "days" in tokens or "aging" in tokens or "duration" in tokens or "lead_time" in col_clean or "tenure_days" in col_clean or "delivery_days" in col_clean:
+        return ("days", "duration", None)
+    if "year" in tokens or "years" in tokens or "tenure" in tokens or "tenure_months" in col_clean:
+        return ("yrs", "duration", None)
+
+    # 3. Percentage & Rate
+    if any(k in tokens for k in ("discount", "rate", "pct", "percent", "percentage", "margin", "churn", "roi", "ctr", "oee", "yield", "ratio", "share")) or any(k in col_tail for k in ("discount", "discount_rate", "rate", "pct", "percent", "margin", "churn")):
+        return ("%", "percentage", None)
+
+    # 4. ID / Primary Key / Record count
+    if col_tail.endswith("_id") or col_tail == "id" or "record" in tokens or "records" in tokens:
+        return ("records", "count", None)
+
+    # 5. Domain-specific counts & metrics
+    if "patient" in tokens or "patients" in tokens:
+        return ("patients", "count", None)
+    if "student" in tokens or "students" in tokens:
+        return ("students", "count", None)
+    if "employee" in tokens or "employees" in tokens or "headcount" in tokens:
+        return ("employees", "count", None)
+    if "run" in tokens or "runs" in tokens:
+        return ("runs", "quantity", None)
+    if "wicket" in tokens or "wickets" in tokens:
+        return ("wickets", "quantity", None)
+    if "view" in tokens or "views" in tokens or "pageview" in tokens:
+        return ("views", "quantity", None)
+    if "click" in tokens or "clicks" in tokens:
+        return ("clicks", "quantity", None)
+    if "stream" in tokens or "streams" in tokens:
+        return ("streams", "quantity", None)
+    if "bidder" in tokens or "bidders" in tokens or "tenderer" in tokens or "tenderers" in tokens:
+        return ("bidders", "count", None)
+    if "tender" in tokens or "tenders" in tokens:
+        return ("tenders", "count", None)
+    if "order" in tokens or "orders" in tokens:
+        return ("orders", "count", None)
+    if "deal" in tokens or "deals" in tokens:
+        return ("deals", "count", None)
+    if "lead" in tokens or "leads" in tokens:
+        return ("leads", "count", None)
+
+    # 6. Quantity & Count
+    if any(k in tokens for k in ("quantity", "qty", "units", "volume", "stock", "inventory", "points", "goals", "baskets")):
+        return ("units", "quantity", None)
+    if any(k in tokens for k in ("transactions", "tickets", "shipments", "properties")):
+        return ("records", "count", None)
+
+    # 6. Score / Rating / Area
+    if "sqft" in tokens or "sq_ft" in col_tail:
+        return ("sqft", "number", None)
+    if "rating" in tokens:
+        return ("/ 10", "score", None)
+    if "score" in tokens:
+        return ("pts", "score", None)
+
+    return ("units", "number", None)
+
+
+def format_metric_display(
+    value: Any,
+    unit: Optional[str] = None,
+    semantic_type: Optional[str] = None,
+    currency_symbol: Optional[str] = None,
+    compact: bool = False,
+    precision: int = 2,
+) -> str:
+    """Format any numeric metric value with its unit and correct notation.
+    
+    Examples:
+        format_metric_display(70.41, unit="₹", semantic_type="currency") -> "₹70.41"
+        format_metric_display(767147, unit="₹", semantic_type="currency") -> "₹767,147"
+        format_metric_display(2.5, unit="units", semantic_type="quantity") -> "2.5 units"
+        format_metric_display(0.3, unit="%", semantic_type="percentage") -> "0.3%"
+        format_metric_display(30, unit="%", semantic_type="percentage") -> "30%"
+        format_metric_display(150, unit="records", semantic_type="count") -> "150 records"
+    """
+    if value is None:
+        return "N/A"
+
+    try:
+        n = float(value)
+    except (ValueError, TypeError):
+        return str(value)
+
+    if math.isnan(n) or math.isinf(n):
+        return "N/A"
+
+    sym = currency_symbol or (unit if unit in ("₹", "$", "€", "£", "¥") else "")
+
+    # 1. Currency
+    if semantic_type == "currency" or sym in ("₹", "$", "€", "£", "¥"):
+        currency_sym = sym or "₹"
+        if compact:
+            abs_n = abs(n)
+            if abs_n >= 1_000_000_000:
+                return f"{currency_sym}{n / 1_000_000_000:.2f}B"
+            if abs_n >= 1_000_000:
+                return f"{currency_sym}{n / 1_000_000:.2f}M"
+            if abs_n >= 1_000:
+                return f"{currency_sym}{n:,.0f}"
+        if n % 1 == 0 and abs(n) >= 100:
+            return f"{currency_sym}{int(n):,}"
+        return f"{currency_sym}{n:,.{precision}f}"
+
+    # 2. Percentage / Rate
+    if semantic_type == "percentage" or unit == "%":
+        # Do not multiply blindly: preserve the raw value and display with %
+        if n % 1 == 0:
+            return f"{int(n)}%"
+        return f"{n:.{precision}f}%"
+
+    # 3. Count / Integer
+    if semantic_type == "count" or unit in ("records", "orders", "tenders", "bidders", "items", "runs", "wickets", "views", "clicks"):
+        u_label = f" {unit}" if unit else ""
+        if compact:
+            abs_n = abs(n)
+            if abs_n >= 1_000_000:
+                return f"{n / 1_000_000:.1f}M{u_label}"
+            if abs_n >= 1_000:
+                return f"{n / 1_000:.1f}K{u_label}"
+        if n % 1 == 0:
+            return f"{int(n):,}{u_label}"
+        return f"{n:,.{precision}f}{u_label}"
+
+    # 4. Quantity
+    if semantic_type == "quantity" or (semantic_type != "number" and unit in ("qty", "volume", "stock")):
+        u_label = f" {unit}" if unit else " units"
+        if n % 1 == 0:
+            return f"{int(n):,}{u_label}"
+        return f"{n:,.{precision}f}{u_label}"
+
+    # 5. Duration
+    if semantic_type == "duration" or unit in ("days", "hrs", "mins", "s", "ms", "yrs"):
+        u_label = f" {unit}" if unit else ""
+        if n % 1 == 0:
+            return f"{int(n):,}{u_label}"
+        return f"{n:,.{precision}f}{u_label}"
+
+    # 6. Score / Rating
+    if semantic_type == "score" or (unit and (unit.startswith("/") or unit == "pts")):
+        u_label = f" {unit}" if unit else ""
+        return f"{n:.{precision}f}{u_label}"
+
+    # 7. General / Neutral numeric
+    u_label = f" {unit}" if unit and unit not in ("units", "") and semantic_type != "number" else ""
+    if compact and abs(n) >= 1000:
+        if abs(n) >= 1_000_000:
+            return f"{n / 1_000_000:.2f}M{u_label}"
+        return f"{n / 1_000:.1f}K{u_label}"
+    if n % 1 == 0 and abs(n) >= 100:
+        return f"{int(n):,}{u_label}"
+    return f"{n:,.{precision}f}{u_label}".rstrip("0").rstrip(".") if "." in f"{n:.{precision}f}" and n % 1 == 0 else f"{n:,.{precision}f}{u_label}"
+
+
+def build_metric_tooltip_details(
+    metric_name: str,
+    value: Any,
+    unit: Optional[str] = None,
+    aggregation: Optional[str] = None,
+    source_column: Optional[str] = None,
+    semantic_type: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Generate structured tooltip details for any metric card."""
+    formatted = format_metric_display(value, unit=unit, semantic_type=semantic_type)
+    full_formatted = format_metric_display(value, unit=unit, semantic_type=semantic_type, compact=False, precision=4)
+    
+    agg_method = aggregation.upper() if aggregation else "SUM"
+    rule_desc = (
+        f"Currency monetary amount formatted with symbol '{unit}'" if semantic_type == "currency"
+        else f"Percentage rate formatted with '{unit}'" if semantic_type == "percentage"
+        else f"Quantity volume formatted with '{unit}'" if semantic_type == "quantity"
+        else f"Discrete observation count of records" if semantic_type == "count"
+        else f"Time duration measured in {unit}" if semantic_type == "duration"
+        else f"Standard numeric aggregation ({agg_method})"
+    )
+
+    return {
+        "metric_name": metric_name,
+        "value": value,
+        "formatted_value": formatted,
+        "full_value": full_formatted,
+        "unit": unit or "units",
+        "aggregation_method": agg_method,
+        "source_column": source_column or metric_name,
+        "semantic_type": semantic_type or "number",
+        "formatting_rule": rule_desc,
+    }
+

@@ -13,6 +13,8 @@ import pandas as pd
 
 from app.domains.base import KpiRule
 from app.schemas.domain_blueprint import DomainKpiSchema
+from app.services.column_formatter import detect_column_unit, format_metric_display
+from app.services.type_inference import detect_dataset_currency
 
 
 def compute_domain_kpis(
@@ -21,6 +23,7 @@ def compute_domain_kpis(
 ) -> List[DomainKpiSchema]:
     """Compute factual KPIs based on validated blueprint rules and mapped columns."""
     results: List[DomainKpiSchema] = []
+    dataset_currency = detect_dataset_currency(df)
 
     for rule, matched_cols in validated_kpis:
         if not matched_cols:
@@ -71,17 +74,31 @@ def compute_domain_kpis(
             is_reliable = False
 
         if value is not None and not math.isnan(value) and not math.isinf(value):
+            detected_unit, detected_sem_type, sym = detect_column_unit(col, series=series, dataset_currency=dataset_currency)
+            
             # Round value reasonably
             if rule.format == "percentage":
-                # Convert fraction to percentage if <= 1.0
+                # Convert fraction to percentage if <= 1.0 and rule explicitly percentage
                 if 0.0 <= value <= 1.0:
                     rounded_val = round(value * 100.0, 2)
                 else:
                     rounded_val = round(value, 2)
-            elif rule.format in ("currency", "number"):
+                unit_label = "%"
+                sem_type = "percentage"
+            elif rule.format == "currency":
                 rounded_val = round(value, 2)
+                unit_label = sym or "₹"
+                sem_type = "currency"
+            elif rule.format == "duration":
+                rounded_val = round(value, 2)
+                unit_label = detected_unit if detected_unit in ("days", "hrs", "mins", "s", "yrs") else "days"
+                sem_type = "duration"
             else:
                 rounded_val = round(value, 2)
+                unit_label = detected_unit
+                sem_type = detected_sem_type
+
+            formatted = format_metric_display(rounded_val, unit=unit_label, semantic_type=sem_type, currency_symbol=sym)
 
             results.append(
                 DomainKpiSchema(
@@ -94,6 +111,10 @@ def compute_domain_kpis(
                     matched_columns=matched_cols,
                     business_meaning=rule.business_meaning,
                     is_reliable=is_reliable,
+                    unit=unit_label,
+                    formatted_value=formatted,
+                    source_column=col,
+                    formatting_rule=f"{rule.formula.upper()} of {col} formatted as {sem_type} ({unit_label})",
                 )
             )
 

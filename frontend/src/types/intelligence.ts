@@ -27,6 +27,10 @@ export interface DomainKpi {
   business_meaning: string
   is_reliable: boolean
   skip_reason?: string | null
+  unit?: string | null
+  formatted_value?: string | null
+  source_column?: string | null
+  formatting_rule?: string | null
 }
 
 export interface DomainChartSpec {
@@ -159,6 +163,9 @@ export interface NumericStats {
   p99?: number | null
   outlier_count_iqr?: number
   outlier_count_zscore?: number
+  unit?: string
+  semantic_type?: string
+  currency_symbol?: string | null
 }
 
 export interface CategoricalStats {
@@ -169,6 +176,8 @@ export interface CategoricalStats {
   cardinality_ratio: number
   mode?: string | null
   top_values: Array<{ value: string; count: number; pct: number }>
+  unit?: string
+  semantic_type?: string
 }
 
 export interface UniversalStatistics {
@@ -198,6 +207,9 @@ export interface MetricStatus {
   category: string
   business_meaning: string
   formula?: string | null
+  unit?: string | null
+  source_column?: string | null
+  aggregation_method?: string | null
 }
 
 export interface SectionChart {
@@ -410,6 +422,21 @@ export interface TrendSummary {
   data_sufficiency_note: string
 }
 
+export interface DomainTrendInterpretation {
+  domain_id: string
+  domain_name: string
+  metric_name: string
+  metric_role: string
+  direction: "increasing" | "decreasing" | "stable" | "fluctuating" | "insufficient_data"
+  actual_change_text: string
+  contextual_interpretation: string
+  business_sentiment: "positive" | "negative" | "neutral" | "warning" | "concern" | "improvement" | "informational"
+  confidence: number
+  confidence_level: "High" | "Moderate" | "Neutral / Unassumed"
+  qualification: string
+  distinction_note?: string | null
+}
+
 export interface TrendsIntelligenceResponse {
   dataset_id: string
   has_time_dimension: boolean
@@ -420,6 +447,7 @@ export interface TrendsIntelligenceResponse {
   selected_metric?: string | null
   selected_metric_descriptor?: MetricDescriptor | null
   metric_context?: MetricContext | null
+  domain_interpretation?: DomainTrendInterpretation | null
   trend_summary?: TrendSummary | null
   what_this_chart_tells_you: string[]
   metric_interpretation?: string | null
@@ -451,23 +479,78 @@ export interface HistoricalPoint {
   actual: number
 }
 
+export interface ForecastMethodEvaluation {
+  method_key: string
+  method_name: string
+  description: string
+  in_sample_metrics: {
+    mae?: number | null
+    rmse?: number | null
+    mape?: number | null
+  }
+  holdout_metrics?: {
+    mae?: number | null
+    rmse?: number | null
+    mape?: number | null
+  } | null
+  eval_score: number
+  is_selected: boolean
+}
+
 export interface ForecastResponse {
   dataset_id: string
   is_available: boolean
   unavailable_reason?: string | null
   metric?: string | null
+  available_metrics: string[]
   time_column?: string | null
   horizon: number
+  frequency?: string | null
+  frequency_label?: string | null
   method_used: string
   historical_points: HistoricalPoint[]
   forecast_points: ForecastPoint[]
+  historical_range?: {
+    start_date: string
+    end_date: string
+    total_periods: number
+  }
+  forecast_range?: {
+    start_date: string
+    end_date: string
+    total_periods: number
+  }
+  latest_actual?: number | null
+  final_forecast?: number | null
+  absolute_change?: number | null
   projected_growth_pct?: number | null
   accuracy_metrics: {
     mape?: number | null
     rmse?: number | null
     mae?: number | null
   }
+  validation_summary?: {
+    has_holdout: boolean
+    holdout_periods: number
+    total_historical_periods: number
+    validation_strategy: string
+    in_sample_accuracy: {
+      mae?: number | null
+      rmse?: number | null
+      mape?: number | null
+    }
+    holdout_accuracy?: {
+      mae?: number | null
+      rmse?: number | null
+      mape?: number | null
+    } | null
+  }
+  method_comparison?: ForecastMethodEvaluation[]
   confidence_score: number
+  domain_interpretation?: string | null
+  unit?: string | null
+  currency_symbol?: string | null
+  horizon_warning?: string | null
   limitations: string[]
   disclaimer: string
 }

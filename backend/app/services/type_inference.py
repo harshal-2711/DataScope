@@ -97,9 +97,80 @@ class ColumnInference:
     unique_count: int
     sample_values: List[Any]
     warnings: List[str]
+    unit: Optional[str] = None
+    currency_symbol: Optional[str] = None
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
+
+
+_INDIAN_CONTEXT_KEYWORDS = {
+    "ipl", "cricket", "runs", "wickets", "lakh", "lakhs", "crore", "crores",
+    "gst", "pan", "aadhaar", "inr", "rs", "rupee", "rupees", "pwd", "nhm",
+    "mumbai", "delhi", "bengaluru", "chennai", "kolkata", "hyderabad", "ahmedabad",
+    "pune", "jaipur", "bihar", "maharashtra", "karnataka", "tamil", "gujarat"
+}
+
+
+def detect_dataset_currency(df: pd.DataFrame) -> Optional[str]:
+    """Detect dataset-wide currency symbol from columns, metadata, sample values, or domain signals."""
+    col_names = [str(c).lower() for c in df.columns]
+    
+    # 1. Dedicated currency column
+    for c in df.columns:
+        clow = str(c).lower()
+        if "currency" in clow or clow == "curr":
+            vals = df[c].dropna().astype(str).str.upper().str.strip()
+            if not vals.empty:
+                val_counts = vals.value_counts()
+                top_val = val_counts.index[0]
+                if top_val in ("INR", "₹", "RS", "RUPEES", "RUPEE"):
+                    return "₹"
+                if top_val in ("USD", "$"):
+                    return "$"
+                if top_val in ("EUR", "€"):
+                    return "€"
+                if top_val in ("GBP", "£"):
+                    return "£"
+                if top_val in ("JPY", "¥", "CNY"):
+                    return "¥"
+                if top_val in ("AUD", "CAD", "NZD", "SGD"):
+                    return "$"
+
+    # 2. Column name hints
+    for name in col_names:
+        if any(kw in name for kw in ("inr", "rupee", "rupees", "_rs", "rs_")):
+            return "₹"
+        if any(kw in name for kw in ("_usd", "usd_", "in_usd", "(usd)")):
+            return "$"
+        if any(kw in name for kw in ("_eur", "eur_", "in_eur", "(eur)")):
+            return "€"
+        if any(kw in name for kw in ("_gbp", "gbp_", "in_gbp", "(gbp)")):
+            return "£"
+
+    # 3. Check sample values across string columns for currency symbols
+    for col in df.columns:
+        s = df[col]
+        if not pdt.is_numeric_dtype(s) and not pdt.is_bool_dtype(s):
+            samples = s.dropna().head(50).astype(str).str.strip()
+            if not samples.empty:
+                if (samples.str.startswith("₹") | samples.str.endswith("₹") | samples.str.contains("INR", case=False) | samples.str.contains("Rs.", case=False)).mean() > 0.3:
+                    return "₹"
+                if (samples.str.startswith("€") | samples.str.endswith("€")).mean() > 0.3:
+                    return "€"
+                if (samples.str.startswith("£") | samples.str.endswith("£")).mean() > 0.3:
+                    return "£"
+                if (samples.str.startswith("¥") | samples.str.endswith("¥")).mean() > 0.3:
+                    return "¥"
+                if (samples.str.startswith("$") | samples.str.endswith("$")).mean() > 0.3:
+                    return "$"
+
+    # 4. Check Indian domain keywords
+    combined_text = " ".join(col_names).lower()
+    if any(k in combined_text for k in _INDIAN_CONTEXT_KEYWORDS):
+        return "₹"
+
+    return None
 
 
 def _looks_like_identifier_name(name: str) -> bool:

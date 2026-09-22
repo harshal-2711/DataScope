@@ -39,6 +39,7 @@ import {
 } from "lucide-react"
 import type { TrendsIntelligenceResponse } from "@/types/intelligence"
 import { fetchTrendsIntelligence } from "@/lib/datasetApi"
+import { formatMetricValue } from "@/lib/format"
 
 interface TrendsIntelligenceViewProps {
   datasetId: string
@@ -518,7 +519,7 @@ export function TrendsIntelligenceView({
         </div>
       )}
 
-      {/* 4. Plain-English Trend Summary */}
+      {/* 4. Domain-Aware Trend Interpretation & Plain-English Summary */}
       {summary && (
         <div className="rounded-xl border border-border bg-card p-5 shadow-xs space-y-4">
           <div className="flex flex-wrap items-center justify-between gap-3">
@@ -553,6 +554,88 @@ export function TrendsIntelligenceView({
             </span>
           </div>
 
+          {/* Dedicated Domain-Aware Intelligence Context Card */}
+          {data.domain_interpretation && (
+            <div className="rounded-lg border border-primary/25 bg-primary/5 p-4 space-y-3">
+              <div className="flex flex-wrap items-center justify-between gap-2 border-b border-primary/15 pb-2.5">
+                <div className="flex items-center gap-2">
+                  <Sparkles className="h-4 w-4 text-primary" />
+                  <h4 className="text-xs font-bold uppercase tracking-wider text-primary">
+                    Domain-Aware Trend Interpretation
+                  </h4>
+                  <span className="rounded-md bg-primary/15 px-2 py-0.5 text-[11px] font-semibold text-primary">
+                    {data.domain_interpretation.domain_name}
+                  </span>
+                  <span className="rounded-md bg-muted px-2 py-0.5 text-[11px] font-medium text-muted-foreground">
+                    Role: {data.domain_interpretation.metric_role}
+                  </span>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <span
+                    className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-[11px] font-semibold ${
+                      data.domain_interpretation.confidence_level === "High"
+                        ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
+                        : data.domain_interpretation.confidence_level === "Moderate"
+                        ? "bg-sky-500/10 text-sky-600 dark:text-sky-400"
+                        : "bg-muted text-muted-foreground"
+                    }`}
+                  >
+                    {data.domain_interpretation.confidence_level} Confidence ({Math.round(data.domain_interpretation.confidence * 100)}%)
+                  </span>
+                </div>
+              </div>
+
+              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 pt-1 text-xs">
+                <div className="space-y-1 p-2.5 rounded-md bg-background/80 border border-border/60">
+                  <span className="text-[10px] font-semibold uppercase text-muted-foreground block">
+                    1. Metric & Column
+                  </span>
+                  <strong className="text-sm font-bold text-foreground block">
+                    {data.domain_interpretation.metric_name}
+                  </strong>
+                  <span className="text-[11px] font-mono text-muted-foreground">
+                    {selectedMetric}
+                  </span>
+                </div>
+
+                <div className="space-y-1 p-2.5 rounded-md bg-background/80 border border-border/60">
+                  <span className="text-[10px] font-semibold uppercase text-muted-foreground block">
+                    2. Actual Trend Change
+                  </span>
+                  <strong className="text-sm font-bold text-foreground block">
+                    {data.domain_interpretation.actual_change_text}
+                  </strong>
+                  <span className="text-[11px] text-muted-foreground">
+                    Direction: {data.domain_interpretation.direction.toUpperCase()}
+                  </span>
+                </div>
+
+                <div className="space-y-1 p-2.5 rounded-md bg-background/80 border border-border/60 sm:col-span-2 lg:col-span-1">
+                  <span className="text-[10px] font-semibold uppercase text-muted-foreground block">
+                    3. Contextual Interpretation
+                  </span>
+                  <p className="text-xs font-medium text-foreground leading-relaxed">
+                    {data.domain_interpretation.contextual_interpretation}
+                  </p>
+                </div>
+              </div>
+
+              {/* Confidence qualification & distinction notes */}
+              <div className="pt-2 border-t border-primary/10 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-[11px] text-muted-foreground">
+                <div>
+                  <strong className="text-foreground">Qualification: </strong>
+                  {data.domain_interpretation.qualification}
+                </div>
+                {data.domain_interpretation.distinction_note && (
+                  <div className="text-amber-600 dark:text-amber-400 font-medium">
+                    {data.domain_interpretation.distinction_note}
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
           <div className="p-4 rounded-lg bg-muted/30 border border-border/70 space-y-2">
             <div className="flex items-center gap-2">
               <FileText className="h-4 w-4 text-primary" />
@@ -564,79 +647,185 @@ export function TrendsIntelligenceView({
               {summary.plain_english_summary}
             </p>
             <p className="text-xs text-muted-foreground italic pt-1">
-              Note: This interpretation describes observed historical dataset patterns only and does not claim unrecorded external causes.
+              Note: This interpretation describes observed historical dataset patterns according to verified domain semantics and does not assert speculative external causes.
             </p>
           </div>
 
-          {/* 5. Four Key Snapshot KPI Cards */}
-          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-            <div className="p-3.5 rounded-lg border border-border/80 bg-background space-y-1">
-              <span className="text-xs text-muted-foreground font-medium">Current Period Value</span>
-              <div className="text-lg font-bold text-foreground">
-                {summary.latest_value.toLocaleString()}{" "}
-                <span className="text-xs font-normal text-muted-foreground">
-                  ({summary.latest_period})
-                </span>
-              </div>
-            </div>
+          {/* 5. Four Key Snapshot KPI Cards with Explicit Metric Context */}
+          {(() => {
+            const changePct = summary.latest_change_pct
+            const changeAbs = summary.latest_change_absolute
+            const roleLower = (data.domain_interpretation?.metric_role || "").toLowerCase()
+            const isInvertedMetric =
+              roleLower.includes("cost") ||
+              roleLower.includes("expense") ||
+              roleLower.includes("loss") ||
+              roleLower.includes("defect") ||
+              roleLower.includes("attrition") ||
+              roleLower.includes("readmission") ||
+              roleLower.includes("lead_time") ||
+              roleLower.includes("lead time") ||
+              roleLower.includes("duration")
 
-            <div className="p-3.5 rounded-lg border border-border/80 bg-background space-y-1">
-              <span className="text-xs text-muted-foreground font-medium">Previous Period & Change</span>
-              <div className="flex items-center gap-1.5">
-                {summary.latest_change_pct != null ? (
-                  <span
-                    className={`text-lg font-bold flex items-center ${
-                      summary.latest_change_pct > 0
-                        ? "text-emerald-600 dark:text-emerald-400"
-                        : summary.latest_change_pct < 0
-                        ? "text-rose-600 dark:text-rose-400"
-                        : "text-muted-foreground"
-                    }`}
-                  >
-                    {summary.latest_change_pct > 0 ? (
-                      <ArrowUpRight className="h-4 w-4 mr-0.5" />
-                    ) : (
-                      <ArrowDownRight className="h-4 w-4 mr-0.5" />
+            let changeTitleText = ""
+            let changeColorClass = "text-muted-foreground"
+            let changeBadgeBg = "bg-muted text-muted-foreground"
+
+            if (changePct != null) {
+              if (changePct > 0) {
+                changeTitleText = `${metricName} Increased by ${Math.abs(changePct)}%`
+                changeColorClass = isInvertedMetric
+                  ? "text-rose-600 dark:text-rose-400"
+                  : "text-emerald-600 dark:text-emerald-400"
+                changeBadgeBg = isInvertedMetric
+                  ? "bg-rose-500/10 text-rose-600 dark:text-rose-400"
+                  : "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
+              } else if (changePct < 0) {
+                changeTitleText = `${metricName} Decreased by ${Math.abs(changePct)}%`
+                changeColorClass = isInvertedMetric
+                  ? "text-emerald-600 dark:text-emerald-400"
+                  : "text-rose-600 dark:text-rose-400"
+                changeBadgeBg = isInvertedMetric
+                  ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
+                  : "bg-rose-500/10 text-rose-600 dark:text-rose-400"
+              } else {
+                changeTitleText = `${metricName} Remained Stable (0.0%)`
+                changeColorClass = "text-sky-600 dark:text-sky-400"
+                changeBadgeBg = "bg-sky-500/10 text-sky-600 dark:text-sky-400"
+              }
+            } else {
+              changeTitleText = `${metricName} Baseline Recorded`
+            }
+
+            const activeUnit = activeDesc?.unit || "units"
+            const activeSemType = activeDesc?.semantic_type
+            const formattedLatest = formatMetricValue(summary.latest_value, {
+              unit: activeUnit,
+              semanticType: activeSemType,
+              compact: true,
+            })
+            const formattedHighest = summary.highest_value != null
+              ? formatMetricValue(summary.highest_value, { unit: activeUnit, semanticType: activeSemType, compact: true })
+              : "N/A"
+            const formattedLowest = summary.lowest_value != null
+              ? formatMetricValue(summary.lowest_value, { unit: activeUnit, semanticType: activeSemType, compact: true })
+              : "N/A"
+            const formattedPrev = summary.previous_value != null
+              ? formatMetricValue(summary.previous_value, { unit: activeUnit, semanticType: activeSemType, compact: true })
+              : null
+
+            return (
+              <div className="grid gap-3.5 sm:grid-cols-2 lg:grid-cols-4">
+                {/* Card 1: Current Period Value */}
+                <div className="p-4 rounded-xl border border-border/80 bg-background/90 hover:border-primary/40 transition-all space-y-1.5 shadow-xs">
+                  <div className="flex items-center justify-between text-xs text-muted-foreground">
+                    <span className="font-semibold uppercase tracking-wider text-[11px]">Current Period</span>
+                    <span className="text-[11px] font-mono">{summary.latest_period}</span>
+                  </div>
+                  <div className="space-y-0.5">
+                    <div className="text-xl font-bold text-foreground tracking-tight" title={summary.latest_value.toString()}>
+                      {formattedLatest}
+                    </div>
+                    <div className="flex items-center justify-between gap-1">
+                      <p className="text-xs font-medium text-muted-foreground truncate" title={metricName}>
+                        Latest {metricName}
+                      </p>
+                      <span className="rounded bg-muted px-1.5 py-0.2 text-[10px] font-mono font-medium text-muted-foreground">
+                        {activeUnit}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Card 2: Period-over-Period Change */}
+                <div className="p-4 rounded-xl border border-border/80 bg-background/90 hover:border-primary/40 transition-all space-y-1.5 shadow-xs sm:col-span-2 lg:col-span-1">
+                  <div className="flex items-center justify-between text-xs text-muted-foreground">
+                    <span className="font-semibold uppercase tracking-wider text-[11px]">Period-over-Period Change</span>
+                    {summary.previous_period && (
+                      <span className="text-[11px] font-mono text-muted-foreground truncate" title={`vs ${summary.previous_period}`}>
+                        vs {summary.previous_period}
+                      </span>
                     )}
-                    {summary.latest_change_pct > 0 ? "+" : ""}
-                    {summary.latest_change_pct}%
-                  </span>
-                ) : (
-                  <span className="text-sm font-semibold text-muted-foreground">
-                    N/A (Single Period)
-                  </span>
-                )}
-                {summary.latest_change_absolute != null && (
-                  <span className="text-xs text-muted-foreground">
-                    (Δ {summary.latest_change_absolute > 0 ? "+" : ""}
-                    {summary.latest_change_absolute.toLocaleString()})
-                  </span>
-                )}
-              </div>
-            </div>
+                  </div>
+                  <div className="space-y-1">
+                    <div className={`text-sm font-bold flex items-center gap-1.5 ${changeColorClass}`}>
+                      {changePct != null ? (
+                        <>
+                          {changePct > 0 ? (
+                            <ArrowUpRight className="h-4 w-4 shrink-0" />
+                          ) : changePct < 0 ? (
+                            <ArrowDownRight className="h-4 w-4 shrink-0" />
+                          ) : (
+                            <Minus className="h-4 w-4 shrink-0" />
+                          )}
+                          <span className="leading-tight">{changeTitleText}</span>
+                        </>
+                      ) : (
+                        <span className="text-xs font-semibold text-muted-foreground">Single Period (No Prior Baseline)</span>
+                      )}
+                    </div>
 
-            <div className="p-3.5 rounded-lg border border-border/80 bg-background space-y-1">
-              <span className="text-xs text-muted-foreground font-medium">Highest Recorded Period (Peak)</span>
-              <div className="flex items-center gap-1.5">
-                <Award className="h-4 w-4 text-amber-500" />
-                <span className="text-lg font-bold text-foreground">
-                  {summary.highest_value?.toLocaleString()}
-                </span>
-                <span className="text-xs text-muted-foreground">({summary.highest_period})</span>
-              </div>
-            </div>
+                    {changeAbs != null && (
+                      <div className="flex flex-wrap items-center gap-2 pt-0.5 text-xs">
+                        <span className={`inline-flex items-center px-2 py-0.5 rounded text-[11px] font-semibold ${changeBadgeBg}`}>
+                          Change: {changeAbs > 0 ? "+" : ""}{formatMetricValue(changeAbs, { unit: activeUnit, semanticType: activeSemType, compact: true })}
+                        </span>
+                        {formattedPrev && (
+                          <span className="text-[11px] text-muted-foreground truncate">
+                            (Prev: {formattedPrev})
+                          </span>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                </div>
 
-            <div className="p-3.5 rounded-lg border border-border/80 bg-background space-y-1">
-              <span className="text-xs text-muted-foreground font-medium">Lowest Recorded Period (Trough)</span>
-              <div className="flex items-center gap-1.5">
-                <TrendingDown className="h-4 w-4 text-muted-foreground" />
-                <span className="text-lg font-bold text-foreground">
-                  {summary.lowest_value?.toLocaleString()}
-                </span>
-                <span className="text-xs text-muted-foreground">({summary.lowest_period})</span>
+                {/* Card 3: Highest Recorded Period */}
+                <div className="p-4 rounded-xl border border-border/80 bg-background/90 hover:border-primary/40 transition-all space-y-1.5 shadow-xs">
+                  <div className="flex items-center justify-between text-xs text-muted-foreground">
+                    <span className="font-semibold uppercase tracking-wider text-[11px]">All-Time Peak</span>
+                    <span className="text-[11px] font-mono">{summary.highest_period}</span>
+                  </div>
+                  <div className="space-y-0.5">
+                    <div className="text-xl font-bold text-foreground tracking-tight flex items-center gap-1.5">
+                      <Award className="h-4 w-4 text-amber-500 shrink-0" />
+                      <span>{formattedHighest}</span>
+                    </div>
+                    <div className="flex items-center justify-between gap-1">
+                      <p className="text-xs font-medium text-muted-foreground truncate" title={metricName}>
+                        Highest {metricName}
+                      </p>
+                      <span className="rounded bg-muted px-1.5 py-0.2 text-[10px] font-mono font-medium text-muted-foreground">
+                        {activeUnit}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Card 4: Lowest Recorded Period */}
+                <div className="p-4 rounded-xl border border-border/80 bg-background/90 hover:border-primary/40 transition-all space-y-1.5 shadow-xs">
+                  <div className="flex items-center justify-between text-xs text-muted-foreground">
+                    <span className="font-semibold uppercase tracking-wider text-[11px]">All-Time Lowest</span>
+                    <span className="text-[11px] font-mono">{summary.lowest_period}</span>
+                  </div>
+                  <div className="space-y-0.5">
+                    <div className="text-xl font-bold text-foreground tracking-tight flex items-center gap-1.5">
+                      <TrendingDown className="h-4 w-4 text-sky-500 dark:text-sky-400 shrink-0" />
+                      <span>{formattedLowest}</span>
+                    </div>
+                    <div className="flex items-center justify-between gap-1">
+                      <p className="text-xs font-medium text-muted-foreground truncate" title={metricName}>
+                        Lowest {metricName}
+                      </p>
+                      <span className="rounded bg-muted px-1.5 py-0.2 text-[10px] font-mono font-medium text-muted-foreground">
+                        {activeUnit}
+                      </span>
+                    </div>
+                  </div>
+                </div>
               </div>
-            </div>
-          </div>
+            )
+          })()}
         </div>
       )}
 

@@ -1,8 +1,15 @@
-"""Time-series statistical forecasting engine.
+"""Universal Time-Series Statistical Forecasting Engine for DataScope.
 
-Provides optional, mathematically grounded forecasting using Holt's Linear
-Exponential Smoothing with analytical prediction intervals (80% and 95%).
-Never presents forecasts as guaranteed outcomes.
+Dataset-agnostic forecasting supporting multiple baseline and trend methods:
+- Naive Baseline
+- Moving Average
+- Holt's Linear Exponential Smoothing
+- Linear Trend Extrapolation
+- Auto Model Selection with Holdout / In-sample Validation
+
+Includes prediction intervals (80% and 95%), domain-aware interpretation,
+frequency inference, and data hygiene protections. Never presents forecasts
+as guaranteed outcomes.
 """
 from __future__ import annotations
 
@@ -17,7 +24,24 @@ from app.schemas.domain_blueprint import (
     ForecastResponse,
     HistoricalPointSchema,
 )
-from app.services.trend_engine import _find_numeric_metrics, _find_time_column
+from app.services.column_formatter import detect_column_unit, format_column_label
+from app.services.trend_engine import _find_time_column
+from app.services.type_inference import detect_dataset_currency
+
+
+def _find_forecasting_metrics(df: pd.DataFrame) -> List[str]:
+    """Find valid numeric metrics for time-series forecasting, including constant series, excluding IDs."""
+    metrics: List[str] = []
+    for col in df.columns:
+        col_str = str(col)
+        col_lower = col_str.lower().strip().replace(" ", "_").replace("/", "_")
+        if pd.api.types.is_numeric_dtype(df[col]) and not pd.api.types.is_bool_dtype(df[col]):
+            if any(col_lower == t or col_lower.endswith(f"_{t}") for t in ("id", "code", "zip", "key", "phone")):
+                continue
+            non_null = df[col].dropna()
+            if non_null.nunique() >= 1:
+                metrics.append(col_str)
+    return metrics
 
 
 def _clean_float(val: Any, decimals: int = 2) -> Optional[float]:
@@ -32,12 +56,90 @@ def _clean_float(val: Any, decimals: int = 2) -> Optional[float]:
         return None
 
 
+def _calc_metrics(actual: np.ndarray, predicted: np.ndarray) -> Dict[str, float]:
+    """Calculate MAE, RMSE, and zero-safe MAPE between actual and predicted vectors."""
+    n = len(actual)
+    if n == 0:
+        return {"mae": 0.0, "rmse": 0.0, "mape": 0.0}
+
+    errors = actual - predicted
+    mae = float(np.mean(np.abs(errors)))
+    rmse = float(math.sqrt(np.mean(errors ** 2)))
+
+    # Zero-division guarded MAPE
+    nonzero_mask = np.abs(actual) > 1e-7
+    if np.any(nonzero_mask):
+        mape = float(np.mean(np.abs(errors[nonzero_mask]) / np.abs(actual[nonzero_mask])) * 100.0)
+    else:
+        mape = 0.0
+
+    return {
+        "mae": round(mae, 2),
+        "rmse": round(rmse, 2),
+        "mape": round(min(mape, 999.9), 2),
+    }
+
+
+# --- Forecasting Model Implementations ---------------------------------------
+
+def _fit_naive(
+    series: np.ndarray, horizon: int
+) -> Tuple[np.ndarray, np.ndarray, Dict[str, float], str]:
+    """Naive Baseline model: projects the latest observed value."""
+    n = len(series)
+    last_val = float(series[-1])
+    fitted = np.full(n, last_val)
+    if n > 1:
+        fitted[1:] = series[:-1]
+    
+    forecast = np.full(horizon, last_val)
+    metrics = _calc_metrics(series[1:] if n > 1 else series, fitted[1:] if n > 1 else fitted)
+    desc = "Naive Baseline (Latest Observed Level)"
+    return fitted, forecast, metrics, desc
+
+
+def _fit_moving_average(
+    series: np.ndarray, horizon: int, window: Optional[int] = None
+) -> Tuple[np.ndarray, np.ndarray, Dict[str, float], str]:
+    """Adaptive Moving Average model."""
+    n = len(series)
+    w = window or max(2, min(5, max(1, n // 3)))
+    fitted = np.zeros(n)
+    
+    for t in range(n):
+        start_idx = max(0, t - w)
+        fitted[t] = float(np.mean(series[start_idx:t])) if t > 0 else series[0]
+        
+    tail_mean = float(np.mean(series[-w:])) if n >= w else float(np.mean(series))
+    forecast = np.full(horizon, tail_mean)
+    metrics = _calc_metrics(series[1:] if n > 1 else series, fitted[1:] if n > 1 else fitted)
+    desc = f"Moving Average (window={w} periods)"
+    return fitted, forecast, metrics, desc
+
+
+def _fit_linear_trend(
+    series: np.ndarray, horizon: int
+) -> Tuple[np.ndarray, np.ndarray, Dict[str, float], str]:
+    """Ordinary Least Squares linear trend extrapolation."""
+    n = len(series)
+    x = np.arange(n)
+    if n > 1:
+        slope, intercept = np.polyfit(x, series, deg=1)
+    else:
+        slope, intercept = 0.0, float(series[0])
+
+    fitted = slope * x + intercept
+    future_x = np.arange(n, n + horizon)
+    forecast = slope * future_x + intercept
+    metrics = _calc_metrics(series, fitted)
+    desc = f"Linear Trend (slope={slope:.2f}/period)"
+    return fitted, forecast, metrics, desc
+
+
 def _fit_holt_linear(
-    series: np.ndarray,
-) -> Tuple[float, float, float, float, np.ndarray, float]:
-    """Fit Holt's linear exponential smoothing model using grid search over (alpha, beta).
-    Returns (best_alpha, best_beta, level_end, trend_end, fitted_values, rmse).
-    """
+    series: np.ndarray, horizon: int
+) -> Tuple[np.ndarray, np.ndarray, Dict[str, float], str]:
+    """Holt's Linear Exponential Smoothing with grid-search parameter tuning."""
     n = len(series)
     best_sse = float("inf")
     best_alpha = 0.3
@@ -46,12 +148,11 @@ def _fit_holt_linear(
     best_trend = 0.0
     best_fitted = np.zeros(n)
 
-    # Initial level and trend estimates
     init_level = float(series[0])
     init_trend = float(series[1] - series[0]) if n > 1 else 0.0
 
     alphas = [0.1, 0.2, 0.3, 0.5, 0.7]
-    betas = [0.05, 0.1, 0.2, 0.3]
+    betas = [0.02, 0.05, 0.1, 0.2, 0.3]
 
     for a in alphas:
         for b in betas:
@@ -67,7 +168,6 @@ def _fit_holt_linear(
                 error = actual - pred
                 sse += error * error
 
-                # Update state
                 new_level = a * actual + (1 - a) * (level + trend)
                 new_trend = b * (new_level - level) + (1 - b) * trend
                 level = new_level
@@ -81,64 +181,153 @@ def _fit_holt_linear(
                 best_trend = trend
                 best_fitted = fitted
 
-    rmse = math.sqrt(best_sse / n) if n > 0 else 0.0
-    return best_alpha, best_beta, best_level, best_trend, best_fitted, rmse
+    # Forecast points
+    forecast = np.array([best_level + (h * best_trend) for h in range(1, horizon + 1)])
+    metrics = _calc_metrics(series, best_fitted)
+    desc = f"Holt's Linear Exponential Smoothing (alpha={best_alpha}, beta={best_beta})"
+    return best_fitted, forecast, metrics, desc
 
+
+# --- Domain-Aware Narrative Interpretation -----------------------------------
+
+def _generate_domain_interpretation(
+    metric_name: str,
+    semantic_type: str,
+    unit: str,
+    latest_val: float,
+    final_val: float,
+    growth_pct: Optional[float],
+    horizon: int,
+    freq_label: str,
+    method_name: str,
+) -> str:
+    """Generate professional, cautious domain-aware executive interpretations."""
+    pretty_name = format_column_label(metric_name)
+    m_lower = metric_name.lower()
+    
+    change_abs = round(final_val - latest_val, 2)
+    change_sign = "+" if change_abs > 0 else ""
+    pct_str = f"{change_sign}{growth_pct:.1f}%" if growth_pct is not None else "N/A"
+    
+    direction = "an upward trajectory" if change_abs > 0.05 else "a downward trend" if change_abs < -0.05 else "relative stability"
+    verb = "projected to increase" if change_abs > 0.05 else "projected to contract" if change_abs < -0.05 else "estimated to remain steady"
+
+    # 1. Revenue / Sales
+    if semantic_type == "currency" and any(k in m_lower for k in ("rev", "sale", "income", "gmv", "aov")):
+        narrative = (
+            f"Forecasted revenue for {pretty_name} is {verb} over the next {horizon} {freq_label.lower()} periods, "
+            f"moving from {unit}{latest_val:,.2f} to an estimated {unit}{final_val:,.2f} ({pct_str}, net change {unit}{change_abs:,.2f}). "
+            f"Based on historical trajectories fitted via {method_name}."
+        )
+    # 2. Profit / Margin
+    elif "profit" in m_lower or "ebitda" in m_lower:
+        narrative = (
+            f"Forecasted profitability for {pretty_name} indicates {direction} across the {horizon}-{freq_label.lower()} horizon, "
+            f"reaching an estimated {unit}{final_val:,.2f} ({pct_str} change from the latest {unit}{latest_val:,.2f}). "
+            f"Note: Operational cost shifts or external market dynamics may alter actual returns."
+        )
+    # 3. Expenses / Cost / Spend
+    elif any(k in m_lower for k in ("cost", "spend", "expense", "budget", "fee", "tax")):
+        narrative = (
+            f"Forecasted expenditure for {pretty_name} is {verb} by {pct_str}, "
+            f"moving from {unit}{latest_val:,.2f} to {unit}{final_val:,.2f}. "
+            f"Tracking historical level and rate parameters across {horizon} {freq_label.lower()} periods."
+        )
+    # 4. Volume / Quantity / Headcount / Orders
+    elif semantic_type in ("quantity", "count") or any(k in m_lower for k in ("qty", "unit", "order", "count", "headcount", "patient", "student", "run")):
+        u_str = f" {unit}" if unit and unit not in ("₹", "$", "€", "£") else ""
+        narrative = (
+            f"Forecasted volume for {pretty_name} suggests {direction} across the upcoming {horizon} {freq_label.lower()} periods, "
+            f"projecting from {latest_val:,.2f}{u_str} to approximately {final_val:,.2f}{u_str} ({pct_str})."
+        )
+    # 5. Percentage / Rate / Churn
+    elif semantic_type == "percentage" or unit == "%":
+        narrative = (
+            f"Forecasted rate for {pretty_name} is estimated to shift by {change_sign}{change_abs:.2f} percentage points, "
+            f"moving from {latest_val:.2f}% to approximately {final_val:.2f}% over the {horizon}-{freq_label.lower()} forecast horizon."
+        )
+    # 6. Neutral / Unknown
+    else:
+        u_str = f" {unit}" if unit and unit not in ("units", "") else ""
+        narrative = (
+            f"Based on empirical historical patterns, statistical modeling projects {direction} for {pretty_name}, "
+            f"moving from {latest_val:,.2f}{u_str} to an estimated {final_val:,.2f}{u_str} ({pct_str}) across {horizon} {freq_label.lower()} periods."
+        )
+
+    return f"{narrative} Forecasts are mathematical extrapolations of past patterns and do not guarantee future outcomes."
+
+
+# --- Main Forecast Engine ---------------------------------------------------
 
 def compute_forecast(
     df: pd.DataFrame,
     dataset_id: str,
-    horizon: int = 6,
+    horizon: int = 7,
     metric: Optional[str] = None,
     granularity: Optional[str] = None,
+    method: Optional[str] = "auto",
 ) -> ForecastResponse:
-    """Compute optional statistical forecast for a dataset time series."""
-    horizon = max(1, min(horizon, 24))  # Cap horizon between 1 and 24
+    """Compute dataset-agnostic statistical forecast with multi-model evaluation and validation."""
+    # Sanitize horizon (1 to 60 periods)
+    horizon = max(1, min(horizon, 60))
 
     time_col = _find_time_column(df)
-    numeric_metrics = _find_numeric_metrics(df)
+    numeric_metrics = _find_forecasting_metrics(df)
 
     if not time_col:
         return ForecastResponse(
             dataset_id=dataset_id,
             is_available=False,
-            unavailable_reason="Forecast unavailable because the dataset does not contain a usable time or date dimension.",
+            unavailable_reason="Forecast unavailable because the dataset does not contain a parseable time or date column.",
             horizon=horizon,
-            limitations=["Time-series forecasting requires a parseable date or timestamp column."],
+            available_metrics=numeric_metrics,
+            limitations=[
+                "Time-series forecasting requires at least one date or timestamp dimension.",
+                "Ensure your dataset includes a column formatted as ISO dates (YYYY-MM-DD), timestamps, or standard date formats.",
+            ],
         )
 
-    selected_metric = metric if (metric and metric in numeric_metrics) else (numeric_metrics[0] if numeric_metrics else None)
-
-    if not selected_metric:
+    if not numeric_metrics:
         return ForecastResponse(
             dataset_id=dataset_id,
             is_available=False,
             unavailable_reason="Forecast unavailable because no continuous numeric metric was found to forecast.",
             time_column=time_col,
             horizon=horizon,
-            limitations=["Forecasting requires a continuous numeric target metric."],
+            available_metrics=[],
+            limitations=["Forecasting requires at least one continuous numeric measure."],
         )
 
-    # Parse dates and filter non-null
-    parsed_dates = pd.to_datetime(df[time_col], errors="coerce")
-    clean_df = pd.DataFrame({
-        "date": parsed_dates,
-        "metric": pd.to_numeric(df[selected_metric], errors="coerce"),
-    }).dropna().sort_values("date")
+    selected_metric = metric if (metric and metric in numeric_metrics) else numeric_metrics[0]
 
-    if len(clean_df) < 6:
+    # Parse and clean time-series
+    parsed_dates = pd.to_datetime(df[time_col], errors="coerce")
+    valid_mask = parsed_dates.notna() & df[selected_metric].notna()
+    
+    if valid_mask.sum() < 6:
         return ForecastResponse(
             dataset_id=dataset_id,
             is_available=False,
-            unavailable_reason=f"Forecast unavailable because the dataset contains only {len(clean_df)} valid historical observations (minimum 6 required).",
+            unavailable_reason=f"Forecast unavailable because '{selected_metric}' has only {valid_mask.sum()} valid date-metric observations (minimum 6 required).",
             metric=selected_metric,
+            available_metrics=numeric_metrics,
             time_column=time_col,
             horizon=horizon,
-            limitations=["At least 6 reliable historical periods are required for statistical time-series forecasting."],
+            limitations=["At least 6 historical periods are required for statistically valid forecasting."],
         )
 
-    # Determine frequency / granularity
-    span_days = (clean_df["date"].max() - clean_df["date"].min()).days
+    clean_df = pd.DataFrame({
+        "date": parsed_dates[valid_mask],
+        "metric": pd.to_numeric(df.loc[valid_mask, selected_metric], errors="coerce"),
+    }).dropna().sort_values("date")
+
+    # Metric-specific aggregation: mean for percentages/rates/durations/scores, sum for additive volumes/currencies
+    curr_sym = detect_dataset_currency(df)
+    unit_str, sem_type, _ = detect_column_unit(selected_metric, series=clean_df["metric"], dataset_currency=curr_sym)
+    agg_func = "mean" if sem_type in ("percentage", "duration", "score") or "rate" in selected_metric.lower() or "avg" in selected_metric.lower() else "sum"
+
+    # Infer frequency / granularity
+    span_days = max(1, (clean_df["date"].max() - clean_df["date"].min()).days)
     if granularity in ("D", "W", "M", "Q", "Y"):
         freq = granularity
     elif span_days > 730:
@@ -148,40 +337,108 @@ def compute_forecast(
     else:
         freq = "D"
 
-    clean_df["period"] = clean_df["date"].dt.to_period(freq).dt.to_timestamp()
-    ts = clean_df.groupby("period")["metric"].sum()
+    freq_labels = {"D": "Daily", "W": "Weekly", "M": "Monthly", "Q": "Quarterly", "Y": "Yearly"}
+    freq_label = freq_labels.get(freq, "Daily")
 
-    if len(ts) < 6:
-        # Try finer frequency if period collapsed to < 6
+    clean_df["period"] = clean_df["date"].dt.to_period(freq).dt.to_timestamp()
+    ts = clean_df.groupby("period")["metric"].agg(agg_func)
+
+    # Fallback to daily if grouped periods collapsed to < 6
+    if len(ts) < 6 and freq != "D":
         clean_df["period"] = clean_df["date"].dt.to_period("D").dt.to_timestamp()
-        ts = clean_df.groupby("period")["metric"].sum()
+        ts = clean_df.groupby("period")["metric"].agg(agg_func)
         freq = "D"
+        freq_label = "Daily"
 
     if len(ts) < 6:
         return ForecastResponse(
             dataset_id=dataset_id,
             is_available=False,
-            unavailable_reason=f"Forecast unavailable because the aggregated time series contains only {len(ts)} periods (minimum 6 required).",
+            unavailable_reason=f"Forecast unavailable because the aggregated time series contains only {len(ts)} historical {freq_label.lower()} periods (minimum 6 required).",
             metric=selected_metric,
+            available_metrics=numeric_metrics,
             time_column=time_col,
             horizon=horizon,
-            limitations=["Minimum 6 historical time buckets required to compute level and trend parameters."],
+            frequency=freq,
+            frequency_label=freq_label,
+            limitations=["Minimum 6 distinct historical time buckets required to compute statistical parameters."],
         )
 
+    # Fill any missing intermediate time buckets with linear interpolation
+    ts = ts.sort_index().interpolate(method="linear").bfill().ffill()
+    
     series_vals = ts.values.astype(float)
-    alpha, beta, end_level, end_trend, fitted, rmse = _fit_holt_linear(series_vals)
+    n_obs = len(series_vals)
 
-    # Accuracy metrics
-    actuals = series_vals
-    errors = np.abs(actuals - fitted)
-    mae = float(np.mean(errors))
+    # Multi-Model Evaluation & Holdout Validation
+    methods_dict = {
+        "holt_linear": ("Holt's Linear Exponential Smoothing", _fit_holt_linear),
+        "linear_trend": ("Linear Trend Extrapolation", _fit_linear_trend),
+        "moving_average": ("Moving Average", _fit_moving_average),
+        "naive": ("Naive Baseline", _fit_naive),
+    }
 
-    # MAPE with zero-division guard
-    nonzero_mask = actuals != 0
-    if np.any(nonzero_mask):
-        mape = float(np.mean(np.abs(actuals[nonzero_mask] - fitted[nonzero_mask]) / np.abs(actuals[nonzero_mask])) * 100.0)
+    # Holdout setup when n_obs >= 10
+    has_holdout = n_obs >= 10
+    holdout_size = max(2, min(5, int(n_obs * 0.2))) if has_holdout else 0
+    
+    model_evaluations: List[Dict[str, Any]] = []
+    fitted_map: Dict[str, np.ndarray] = {}
+    forecast_map: Dict[str, np.ndarray] = {}
+    desc_map: Dict[str, str] = {}
+
+    for m_key, (m_title, m_func) in methods_dict.items():
+        # Full in-sample fit & future forecast
+        fitted_full, forecast_full, in_sample_metrics, m_desc = m_func(series_vals, horizon)
+        fitted_map[m_key] = fitted_full
+        forecast_map[m_key] = forecast_full
+        desc_map[m_key] = m_desc
+
+        # Holdout validation score
+        if has_holdout:
+            train_series = series_vals[:-holdout_size]
+            test_series = series_vals[-holdout_size:]
+            _, holdout_pred, _, _ = m_func(train_series, holdout_size)
+            holdout_metrics = _calc_metrics(test_series, holdout_pred)
+            eval_score = holdout_metrics["rmse"]
+        else:
+            holdout_metrics = {}
+            eval_score = in_sample_metrics["rmse"]
+
+        model_evaluations.append({
+            "method_key": m_key,
+            "method_name": m_title,
+            "description": m_desc,
+            "in_sample_metrics": in_sample_metrics,
+            "holdout_metrics": holdout_metrics if has_holdout else None,
+            "eval_score": eval_score,
+            "is_selected": False,
+        })
+
+    # Model Selection (Auto or User-Specified)
+    req_method = (method or "auto").lower()
+    if req_method in methods_dict:
+        selected_key = req_method
     else:
-        mape = 0.0
+        # Auto-pick best model with lowest evaluation RMSE
+        best_eval = min(model_evaluations, key=lambda m: m["eval_score"])
+        selected_key = best_eval["method_key"]
+
+    for m_eval in model_evaluations:
+        if m_eval["method_key"] == selected_key:
+            m_eval["is_selected"] = True
+
+    active_fitted = fitted_map[selected_key]
+    active_forecast = forecast_map[selected_key]
+    active_desc = desc_map[selected_key]
+    active_metrics = next(m["in_sample_metrics"] for m in model_evaluations if m["method_key"] == selected_key)
+    rmse = active_metrics["rmse"]
+    mape = active_metrics["mape"]
+
+    # Non-negative series protection
+    is_non_negative = np.all(series_vals >= 0)
+    if is_non_negative:
+        active_forecast = np.maximum(0.0, active_forecast)
 
     # Historical data points
     historical_points: List[HistoricalPointSchema] = [
@@ -192,13 +449,10 @@ def compute_forecast(
         for dt, v in zip(ts.index, ts.values)
     ]
 
-    # Forecast future points
+    # Future forecast points with expanding prediction intervals (80% and 95%)
     last_date = ts.index[-1]
     last_val = float(ts.iloc[-1])
     forecast_points: List[ForecastPointSchema] = []
-
-    # Check if target is all non-negative
-    is_non_negative = np.all(series_vals >= 0)
 
     for h in range(1, horizon + 1):
         if freq == "D":
@@ -212,65 +466,114 @@ def compute_forecast(
         elif freq == "Y":
             future_dt = last_date + pd.DateOffset(years=h)
         else:
-            future_dt = last_date + pd.Timedelta(days=h * 7)
+            future_dt = last_date + pd.Timedelta(days=h)
 
-        point_forecast = end_level + (h * end_trend)
-        # Expanding standard error over horizon
+        pt_val = float(active_forecast[h - 1])
         se_h = rmse * math.sqrt(h)
 
-        lower_80 = point_forecast - (1.28 * se_h)
-        upper_80 = point_forecast + (1.28 * se_h)
-        lower_95 = point_forecast - (1.96 * se_h)
-        upper_95 = point_forecast + (1.96 * se_h)
+        lower_80 = pt_val - (1.28 * se_h)
+        upper_80 = pt_val + (1.28 * se_h)
+        lower_95 = pt_val - (1.96 * se_h)
+        upper_95 = pt_val + (1.96 * se_h)
 
         if is_non_negative:
-            point_forecast = max(0.0, point_forecast)
+            pt_val = max(0.0, pt_val)
             lower_80 = max(0.0, lower_80)
             lower_95 = max(0.0, lower_95)
 
         forecast_points.append(
             ForecastPointSchema(
                 period=future_dt.strftime("%Y-%m-%d"),
-                forecast=round(float(point_forecast), 2),
-                lower_bound_80=round(float(lower_80), 2),
-                upper_bound_80=round(float(upper_80), 2),
-                lower_bound_95=round(float(lower_95), 2),
-                upper_bound_95=round(float(upper_95), 2),
+                forecast=round(pt_val, 2),
+                lower_bound_80=round(lower_80, 2),
+                upper_bound_80=round(upper_80, 2),
+                lower_bound_95=round(lower_95, 2),
+                upper_bound_95=round(upper_95, 2),
             )
         )
 
-    # Projected growth over horizon
-    end_forecast = forecast_points[-1].forecast if forecast_points else last_val
+    # Change metrics
+    final_val = forecast_points[-1].forecast if forecast_points else last_val
+    abs_change = round(final_val - last_val, 2)
     proj_growth_pct: Optional[float] = None
-    if last_val > 0:
-        proj_growth_pct = round(((end_forecast - last_val) / last_val) * 100.0, 1)
+    if abs(last_val) > 1e-7:
+        proj_growth_pct = round(((final_val - last_val) / abs(last_val)) * 100.0, 1)
 
-    # Confidence score based on MAPE
-    conf_score = max(0.50, min(0.95, round(1.0 - (mape / 100.0), 2))) if mape < 100 else 0.50
+    # Confidence score calculation
+    conf_score = max(0.50, min(0.95, round(1.0 - (min(mape, 100.0) / 150.0), 2)))
+
+    # Horizon warning
+    horizon_warning: Optional[str] = None
+    if horizon > n_obs:
+        horizon_warning = f"Forecast horizon of {horizon} periods exceeds historical data length ({n_obs} {freq_label.lower()} periods). Confidence intervals widen significantly."
+
+    # Domain-aware interpretation
+    domain_narrative = _generate_domain_interpretation(
+        metric_name=selected_metric,
+        semantic_type=sem_type,
+        unit=unit_str,
+        latest_val=last_val,
+        final_val=final_val,
+        growth_pct=proj_growth_pct,
+        horizon=horizon,
+        freq_label=freq_label,
+        method_name=active_desc,
+    )
+
+    validation_summary = {
+        "has_holdout": has_holdout,
+        "holdout_periods": holdout_size,
+        "total_historical_periods": n_obs,
+        "validation_strategy": f"Time-based holdout ({holdout_size} periods)" if has_holdout else "In-sample residual evaluation (dataset < 10 periods)",
+        "in_sample_accuracy": active_metrics,
+        "holdout_accuracy": next((m["holdout_metrics"] for m in model_evaluations if m["method_key"] == selected_key), None),
+    }
+
+    historical_range = {
+        "start_date": ts.index[0].strftime("%Y-%m-%d"),
+        "end_date": ts.index[-1].strftime("%Y-%m-%d"),
+        "total_periods": n_obs,
+    }
+
+    forecast_range = {
+        "start_date": forecast_points[0].period if forecast_points else "",
+        "end_date": forecast_points[-1].period if forecast_points else "",
+        "total_periods": horizon,
+    }
 
     return ForecastResponse(
         dataset_id=dataset_id,
         is_available=True,
         metric=selected_metric,
+        available_metrics=numeric_metrics,
         time_column=time_col,
         horizon=horizon,
-        method_used=f"Holt's Linear Exponential Smoothing (alpha={alpha}, beta={beta})",
+        frequency=freq,
+        frequency_label=freq_label,
+        method_used=active_desc,
         historical_points=historical_points,
         forecast_points=forecast_points,
+        historical_range=historical_range,
+        forecast_range=forecast_range,
+        latest_actual=round(last_val, 2),
+        final_forecast=round(final_val, 2),
+        absolute_change=abs_change,
         projected_growth_pct=proj_growth_pct,
-        accuracy_metrics={
-            "mape": round(mape, 2),
-            "rmse": round(rmse, 2),
-            "mae": round(mae, 2),
-        },
+        accuracy_metrics=active_metrics,
+        validation_summary=validation_summary,
+        method_comparison=model_evaluations,
         confidence_score=conf_score,
+        domain_interpretation=domain_narrative,
+        unit=unit_str,
+        currency_symbol=curr_sym,
+        horizon_warning=horizon_warning,
         limitations=[
-            "Forecasts are purely mathematical projections assuming continuation of historical level and trend trajectories.",
-            "External market shocks, competitor actions, seasonal shifts not captured in history, and regulatory changes cannot be predicted.",
-            "Prediction intervals widen as the forecast horizon extends, indicating increasing uncertainty.",
+            "Forecasts are mathematical extrapolations of historical level, rate, and trend trajectories.",
+            "External market shifts, regulatory shocks, and structural changes cannot be predicted from in-sample data alone.",
+            "Prediction intervals widen as the forecast horizon extends, reflecting compounding uncertainty.",
         ],
         disclaimer=(
-            "Forecasts are mathematical extrapolations of historical patterns based on in-sample data. "
-            "They do not account for unforeseen external events or structural market shifts. Not guaranteed outcomes."
+            "Forecasts are mathematical projections based on historical data. "
+            "They do not account for unforeseen external events or structural market disruptions. Not guaranteed outcomes."
         ),
     )

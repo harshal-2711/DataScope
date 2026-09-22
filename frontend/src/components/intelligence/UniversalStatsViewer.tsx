@@ -7,6 +7,7 @@ import {
   ChevronUp,
   Grid,
 } from "lucide-react"
+import { formatMetricValue, detectColumnUnit } from "@/lib/format"
 import type { UniversalStatistics, NumericStats, CategoricalStats } from "@/types/intelligence"
 
 interface UniversalStatsViewerProps {
@@ -33,6 +34,11 @@ export function UniversalStatsViewer({ statistics }: UniversalStatsViewerProps) 
   const currentNumStats: NumericStats | undefined = activeNumericCol
     ? numeric_statistics[activeNumericCol]
     : undefined
+
+  const detectedInfo = activeNumericCol ? detectColumnUnit(activeNumericCol) : null
+  const colUnit = currentNumStats?.unit || detectedInfo?.unit || ""
+  const colSemType = currentNumStats?.semantic_type || detectedInfo?.semanticType || "number"
+  const colSym = currentNumStats?.currency_symbol || (colUnit === "₹" || colUnit === "$" || colUnit === "€" || colUnit === "£" ? colUnit : null)
 
   const corrCols = Object.keys(correlation_matrix)
 
@@ -189,102 +195,120 @@ export function UniversalStatsViewer({ statistics }: UniversalStatsViewerProps) 
                   </div>
 
                   {currentNumStats && (
-                    <div className="grid gap-3 sm:grid-cols-2 md:grid-cols-4 pt-2">
-                      <div className="rounded-lg border border-border/80 bg-muted/20 p-3 space-y-1">
-                        <span className="text-[10px] font-semibold uppercase text-muted-foreground">
-                          Central Tendency
-                        </span>
-                        <div className="space-y-1 text-xs pt-1">
-                          <div className="flex justify-between">
-                            <span className="text-muted-foreground">Mean:</span>
-                            <span className="font-semibold text-foreground">
-                              {currentNumStats.mean?.toLocaleString() ?? "N/A"}
+                    <div className="space-y-3 pt-2">
+                        {/* Column Unit & Semantic Type Header */}
+                        <div className="flex flex-wrap items-center justify-between gap-2 p-3 rounded-lg bg-muted/40 border border-border/70 text-xs">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="font-semibold text-foreground">Column:</span>
+                            <span className="font-mono text-primary font-bold">{activeNumericCol}</span>
+                            <span className="rounded-md bg-primary/10 px-2 py-0.5 text-[11px] font-semibold text-primary">
+                              {colSemType.toUpperCase()}
+                            </span>
+                            <span className="rounded-md bg-muted px-2 py-0.5 text-[11px] font-semibold text-foreground">
+                              Unit: {colUnit}
                             </span>
                           </div>
-                          <div className="flex justify-between">
-                            <span className="text-muted-foreground">Median:</span>
-                            <span className="font-semibold text-foreground">
-                              {currentNumStats.median?.toLocaleString() ?? "N/A"}
-                            </span>
-                          </div>
-                          <div className="flex justify-between">
-                            <span className="text-muted-foreground">Mode:</span>
-                            <span className="font-semibold text-foreground">
-                              {currentNumStats.mode?.toLocaleString() ?? "N/A"}
-                            </span>
-                          </div>
+                          <span className="text-[11px] text-muted-foreground">
+                            {currentNumStats.valid_count.toLocaleString()} valid rows ({currentNumStats.null_pct}% missing)
+                          </span>
                         </div>
-                      </div>
 
-                      <div className="rounded-lg border border-border/80 bg-muted/20 p-3 space-y-1">
-                        <span className="text-[10px] font-semibold uppercase text-muted-foreground">
-                          Dispersion & Spread
-                        </span>
-                        <div className="space-y-1 text-xs pt-1">
-                          <div className="flex justify-between">
-                            <span className="text-muted-foreground">Min - Max:</span>
-                            <span className="font-semibold text-foreground">
-                              {currentNumStats.min?.toLocaleString()} - {currentNumStats.max?.toLocaleString()}
+                        <div className="grid gap-3 sm:grid-cols-2 md:grid-cols-4">
+                          <div className="rounded-lg border border-border/80 bg-muted/20 p-3 space-y-1">
+                            <span className="text-[10px] font-semibold uppercase text-muted-foreground">
+                              Central Tendency ({colUnit})
                             </span>
+                            <div className="space-y-1 text-xs pt-1">
+                              <div className="flex justify-between">
+                                <span className="text-muted-foreground">Mean:</span>
+                                <span className="font-semibold text-foreground font-mono">
+                                  {formatMetricValue(currentNumStats.mean, { unit: colUnit, semanticType: colSemType, currencySymbol: colSym })}
+                                </span>
+                              </div>
+                              <div className="flex justify-between">
+                                <span className="text-muted-foreground">Median:</span>
+                                <span className="font-semibold text-foreground font-mono">
+                                  {formatMetricValue(currentNumStats.median, { unit: colUnit, semanticType: colSemType, currencySymbol: colSym })}
+                                </span>
+                              </div>
+                              <div className="flex justify-between">
+                                <span className="text-muted-foreground">Mode:</span>
+                                <span className="font-semibold text-foreground font-mono">
+                                  {formatMetricValue(currentNumStats.mode, { unit: colUnit, semanticType: colSemType, currencySymbol: colSym })}
+                                </span>
+                              </div>
+                            </div>
                           </div>
-                          <div className="flex justify-between">
-                            <span className="text-muted-foreground">Range:</span>
-                            <span className="font-semibold text-foreground">
-                              {currentNumStats.range?.toLocaleString() ?? "N/A"}
-                            </span>
-                          </div>
-                          <div className="flex justify-between">
-                            <span className="text-muted-foreground">Std Dev:</span>
-                            <span className="font-semibold text-foreground">
-                              {currentNumStats.std_dev?.toLocaleString() ?? "N/A"}
-                            </span>
-                          </div>
-                          <div className="flex justify-between">
-                            <span className="text-muted-foreground">IQR:</span>
-                            <span className="font-semibold text-foreground">
-                              {currentNumStats.iqr?.toLocaleString() ?? "N/A"}
-                            </span>
-                          </div>
-                        </div>
-                      </div>
 
-                      <div className="rounded-lg border border-border/80 bg-muted/20 p-3 space-y-1">
-                        <span className="text-[10px] font-semibold uppercase text-muted-foreground">
-                          Percentiles
-                        </span>
-                        <div className="space-y-1 text-xs pt-1">
-                          <div className="flex justify-between">
-                            <span className="text-muted-foreground">25th (P25):</span>
-                            <span className="font-semibold text-foreground">
-                              {currentNumStats.p25?.toLocaleString() ?? "N/A"}
+                          <div className="rounded-lg border border-border/80 bg-muted/20 p-3 space-y-1">
+                            <span className="text-[10px] font-semibold uppercase text-muted-foreground">
+                              Dispersion & Spread ({colUnit})
                             </span>
+                            <div className="space-y-1 text-xs pt-1">
+                              <div className="flex justify-between">
+                                <span className="text-muted-foreground">Min - Max:</span>
+                                <span className="font-semibold text-foreground font-mono truncate max-w-[140px]">
+                                  {formatMetricValue(currentNumStats.min, { unit: colUnit, semanticType: colSemType, currencySymbol: colSym })} - {formatMetricValue(currentNumStats.max, { unit: colUnit, semanticType: colSemType, currencySymbol: colSym })}
+                                </span>
+                              </div>
+                              <div className="flex justify-between">
+                                <span className="text-muted-foreground">Range:</span>
+                                <span className="font-semibold text-foreground font-mono">
+                                  {formatMetricValue(currentNumStats.range, { unit: colUnit, semanticType: colSemType, currencySymbol: colSym })}
+                                </span>
+                              </div>
+                              <div className="flex justify-between">
+                                <span className="text-muted-foreground">Std Dev:</span>
+                                <span className="font-semibold text-foreground font-mono">
+                                  {formatMetricValue(currentNumStats.std_dev, { unit: colUnit, semanticType: colSemType, currencySymbol: colSym })}
+                                </span>
+                              </div>
+                              <div className="flex justify-between">
+                                <span className="text-muted-foreground">IQR:</span>
+                                <span className="font-semibold text-foreground font-mono">
+                                  {formatMetricValue(currentNumStats.iqr, { unit: colUnit, semanticType: colSemType, currencySymbol: colSym })}
+                                </span>
+                              </div>
+                            </div>
                           </div>
-                          <div className="flex justify-between">
-                            <span className="text-muted-foreground">50th (P50):</span>
-                            <span className="font-semibold text-foreground">
-                              {currentNumStats.p50?.toLocaleString() ?? "N/A"}
+
+                          <div className="rounded-lg border border-border/80 bg-muted/20 p-3 space-y-1">
+                            <span className="text-[10px] font-semibold uppercase text-muted-foreground">
+                              Percentiles ({colUnit})
                             </span>
+                            <div className="space-y-1 text-xs pt-1">
+                              <div className="flex justify-between">
+                                <span className="text-muted-foreground">25th (P25):</span>
+                                <span className="font-semibold text-foreground font-mono">
+                                  {formatMetricValue(currentNumStats.p25, { unit: colUnit, semanticType: colSemType, currencySymbol: colSym })}
+                                </span>
+                              </div>
+                              <div className="flex justify-between">
+                                <span className="text-muted-foreground">50th (P50):</span>
+                                <span className="font-semibold text-foreground font-mono">
+                                  {formatMetricValue(currentNumStats.p50, { unit: colUnit, semanticType: colSemType, currencySymbol: colSym })}
+                                </span>
+                              </div>
+                              <div className="flex justify-between">
+                                <span className="text-muted-foreground">75th (P75):</span>
+                                <span className="font-semibold text-foreground font-mono">
+                                  {formatMetricValue(currentNumStats.p75, { unit: colUnit, semanticType: colSemType, currencySymbol: colSym })}
+                                </span>
+                              </div>
+                              <div className="flex justify-between">
+                                <span className="text-muted-foreground">90th (P90):</span>
+                                <span className="font-semibold text-foreground font-mono">
+                                  {formatMetricValue(currentNumStats.p90, { unit: colUnit, semanticType: colSemType, currencySymbol: colSym })}
+                                </span>
+                              </div>
+                              <div className="flex justify-between">
+                                <span className="text-muted-foreground">99th (P99):</span>
+                                <span className="font-semibold text-foreground font-mono">
+                                  {formatMetricValue(currentNumStats.p99, { unit: colUnit, semanticType: colSemType, currencySymbol: colSym })}
+                                </span>
+                              </div>
+                            </div>
                           </div>
-                          <div className="flex justify-between">
-                            <span className="text-muted-foreground">75th (P75):</span>
-                            <span className="font-semibold text-foreground">
-                              {currentNumStats.p75?.toLocaleString() ?? "N/A"}
-                            </span>
-                          </div>
-                          <div className="flex justify-between">
-                            <span className="text-muted-foreground">90th (P90):</span>
-                            <span className="font-semibold text-foreground">
-                              {currentNumStats.p90?.toLocaleString() ?? "N/A"}
-                            </span>
-                          </div>
-                          <div className="flex justify-between">
-                            <span className="text-muted-foreground">99th (P99):</span>
-                            <span className="font-semibold text-foreground">
-                              {currentNumStats.p99?.toLocaleString() ?? "N/A"}
-                            </span>
-                          </div>
-                        </div>
-                      </div>
 
                       <div className="rounded-lg border border-border/80 bg-muted/20 p-3 space-y-1">
                         <span className="text-[10px] font-semibold uppercase text-muted-foreground">
@@ -324,7 +348,8 @@ export function UniversalStatsViewer({ statistics }: UniversalStatsViewerProps) 
                         </div>
                       </div>
                     </div>
-                  )}
+                  </div>
+                )}
                 </div>
               )}
             </div>

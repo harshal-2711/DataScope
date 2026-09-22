@@ -187,9 +187,10 @@ def get_dataset_trends(
 )
 def get_dataset_forecast(
     dataset_id: str,
-    horizon: int = Query(6, ge=1, le=24, description="Forecast horizon in time periods (1-24)"),
-    metric: str = Query(None, description="Continuous numeric metric to forecast"),
-    granularity: str = Query(None, description="Time aggregation granularity ('D', 'W', 'M', 'Q', 'Y')"),
+    horizon: int = Query(7, ge=1, le=60, description="Forecast horizon in time periods (1-60)"),
+    metric: Optional[str] = Query(None, description="Continuous numeric metric to forecast"),
+    granularity: Optional[str] = Query(None, description="Time aggregation granularity ('D', 'W', 'M', 'Q', 'Y')"),
+    method: Optional[str] = Query("auto", description="Forecasting method ('auto', 'holt_linear', 'linear_trend', 'moving_average', 'naive')"),
 ) -> dict:
     """Return statistical time-series forecast with confidence intervals and limitations."""
     try:
@@ -198,6 +199,7 @@ def get_dataset_forecast(
             horizon=horizon,
             metric=metric,
             granularity=granularity,
+            method=method,
         )
     except DatasetError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc

@@ -17,6 +17,8 @@ import pandas as pd
 from app.domains.base import TrendRule
 from app.schemas.domain_blueprint import (
     CategoryTrendSchema,
+    DomainIdentitySchema,
+    DomainTrendInterpretationSchema,
     MetricContextSchema,
     MetricDescriptorSchema,
     PeriodComparisonSchema,
@@ -29,6 +31,12 @@ from app.schemas.domain_blueprint import (
     TrendSummarySchema,
 )
 from app.services.column_formatter import format_column_label
+from app.services.column_profiler import profile_dataset
+from app.services.domain_detector import detect_domain
+from app.services.trend_domain_interpreter import (
+    classify_metric_semantic_role,
+    interpret_domain_trend,
+)
 
 
 def _clean_float(val: Any, decimals: int = 2) -> Optional[float]:
@@ -126,7 +134,13 @@ def _find_categorical_dimensions(df: pd.DataFrame) -> List[str]:
     return categories
 
 
-def _classify_metric(col_name: str, series: pd.Series, total_rows: int) -> MetricDescriptorSchema:
+def _classify_metric(
+    col_name: str,
+    series: pd.Series,
+    total_rows: int,
+    domain_id: Optional[str] = None,
+    all_columns: Optional[List[str]] = None,
+) -> MetricDescriptorSchema:
     """Classify a numerical column into a structured, dataset-aware Metric Descriptor."""
     clean_label = format_column_label(col_name)
     col_lower = col_name.lower().replace(" ", "_").replace("/", "_").replace("-", "_")
@@ -149,6 +163,13 @@ def _classify_metric(col_name: str, series: pd.Series, total_rows: int) -> Metri
     recommended_agg: Literal["sum", "mean", "median", "count"] = "sum"
     description = f"Tracks numeric values of {clean_label} observed over time."
     confidence = 0.80
+
+    # Domain-aware role classification
+    role, role_label, role_conf = classify_metric_semantic_role(
+        col_name=col_name,
+        domain_id=domain_id,
+        all_columns=all_columns,
+    )
 
     # 1. Financial Metrics
     fin_keywords = ("sales", "revenue", "profit", "cost", "discount", "shipping", "budget", "expenditure", "freight", "fee", "tax", "expense", "spend", "amount", "price", "income", "earnings", "charges", "turnover", "tender_value")
@@ -222,6 +243,147 @@ def _classify_metric(col_name: str, series: pd.Series, total_rows: int) -> Metri
         unit = "Bidders"
         description = "Total participating bidder submissions across tenders."
         confidence = 0.96
+    elif role == "revenue":
+        clean_label = "Sales Revenue" if clean_label in ("Sales", "Revenue", "Sales Amount") else clean_label
+        group = "Financial Metrics"
+        semantic_type = "Financial / Revenue"
+        recommended_agg = "sum"
+        unit = "Currency"
+        description = f"Total revenue generated for {clean_label} over time."
+        confidence = role_conf
+    elif role == "profit":
+        group = "Financial Metrics"
+        semantic_type = "Financial / Profit"
+        recommended_agg = "sum" if "margin" not in col_lower else "mean"
+        unit = "Currency" if "margin" not in col_lower else "Percentage"
+        description = f"Recorded profit/margin for {clean_label} over time."
+        confidence = role_conf
+    elif role == "loss":
+        group = "Financial Metrics"
+        semantic_type = "Financial / Loss"
+        recommended_agg = "sum"
+        unit = "Currency"
+        description = f"Financial loss deficit recorded for {clean_label} over time."
+        confidence = role_conf
+    elif role == "expense_cost":
+        group = "Financial Metrics"
+        semantic_type = "Financial / Expense"
+        recommended_agg = "sum"
+        unit = "Currency"
+        description = f"Recorded operational expenses/costs for {clean_label}."
+        confidence = role_conf
+    elif role == "sports_wins":
+        group = "Performance Metrics"
+        semantic_type = "Sports / Match Wins"
+        recommended_agg = "sum"
+        unit = "Wins"
+        description = f"Total match victories for {clean_label}."
+        confidence = role_conf
+    elif role == "sports_losses":
+        group = "Performance Metrics"
+        semantic_type = "Sports / Defeats"
+        recommended_agg = "sum"
+        unit = "Losses"
+        description = f"Total match defeats for {clean_label}."
+        confidence = role_conf
+    elif role in ("sports_scoring", "sports_metrics"):
+        group = "Performance Metrics"
+        semantic_type = "Sports / Performance Measure"
+        recommended_agg = "sum" if not any(t in col_lower for t in ("avg", "rate", "pct")) else "mean"
+        unit = "Runs" if "run" in col_lower else ("Points" if "point" in col_lower else ("Goals" if "goal" in col_lower else "Score"))
+        description = f"Sports athletic performance metric for {clean_label}."
+        confidence = role_conf
+    elif role == "healthcare_patient_volume":
+        group = "Operational Metrics"
+        semantic_type = "Healthcare / Patient Volume"
+        recommended_agg = "sum"
+        unit = "Patients" if "patient" in col_lower else "Count"
+        description = f"Total patient admissions and volume for {clean_label}."
+        confidence = role_conf
+    elif role == "healthcare_recovery":
+        group = "Performance Metrics"
+        semantic_type = "Healthcare / Recovery Rate"
+        recommended_agg = "mean"
+        unit = "Percentage" if any(t in col_lower for t in ("rate", "pct")) else "Patients"
+        description = f"Patient recovery and discharge progression for {clean_label}."
+        confidence = role_conf
+    elif role == "healthcare_readmission":
+        group = "Performance Metrics"
+        semantic_type = "Healthcare / Readmission Rate"
+        recommended_agg = "mean" if any(t in col_lower for t in ("rate", "pct")) else "sum"
+        unit = "Percentage" if any(t in col_lower for t in ("rate", "pct")) else "Patients"
+        description = f"Patient readmission rate for {clean_label}."
+        confidence = role_conf
+    elif role == "hr_headcount":
+        group = "Operational Metrics"
+        semantic_type = "HR / Workforce Capacity"
+        recommended_agg = "mean"
+        unit = "Employees"
+        description = f"Total employee staffing capacity for {clean_label}."
+        confidence = role_conf
+    elif role == "hr_attrition":
+        group = "Operational Metrics"
+        semantic_type = "HR / Attrition Rate"
+        recommended_agg = "mean" if any(t in col_lower for t in ("rate", "pct")) else "sum"
+        unit = "Percentage" if any(t in col_lower for t in ("rate", "pct")) else "Employees"
+        description = f"Employee turnover rate for {clean_label}."
+        confidence = role_conf
+    elif role == "hr_salary":
+        group = "Financial Metrics"
+        semantic_type = "HR / Compensation"
+        recommended_agg = "mean"
+        unit = "Currency"
+        description = f"Employee compensation and payroll for {clean_label}."
+        confidence = role_conf
+    elif role in ("hr_attendance", "edu_attendance"):
+        group = "Operational Metrics"
+        semantic_type = "Engagement / Attendance"
+        recommended_agg = "mean"
+        unit = "Percentage" if any(t in col_lower for t in ("rate", "pct")) else "Days"
+        description = f"Attendance rate for {clean_label}."
+        confidence = role_conf
+    elif role == "edu_student_performance":
+        group = "Performance Metrics"
+        semantic_type = "Education / Student Performance"
+        recommended_agg = "mean"
+        unit = "Score" if "gpa" not in col_lower else "GPA"
+        description = f"Student academic performance score for {clean_label}."
+        confidence = role_conf
+    elif role == "edu_failure_rate":
+        group = "Performance Metrics"
+        semantic_type = "Education / Failure Rate"
+        recommended_agg = "mean"
+        unit = "Percentage"
+        description = f"Course failure/dropout rate for {clean_label}."
+        confidence = role_conf
+    elif role == "ops_delivery_time":
+        group = "Operational Metrics"
+        semantic_type = "Operational / Turnaround"
+        recommended_agg = "mean"
+        unit = "Days" if any(t in col_lower for t in ("day", "aging", "delay")) else ("Hours" if "hour" in col_lower else "Units")
+        description = f"Delivery and turnaround duration for {clean_label}."
+        confidence = role_conf
+    elif role == "ops_defect_rate":
+        group = "Performance Metrics"
+        semantic_type = "Quality / Defect Rate"
+        recommended_agg = "mean" if any(t in col_lower for t in ("rate", "pct")) else "sum"
+        unit = "Percentage" if any(t in col_lower for t in ("rate", "pct")) else "Defects"
+        description = f"Quality defect rate for {clean_label}."
+        confidence = role_conf
+    elif role == "procurement_cost":
+        group = "Financial Metrics"
+        semantic_type = "Procurement / Spending"
+        recommended_agg = "sum"
+        unit = "Currency"
+        description = f"Procurement spending and contract value for {clean_label}."
+        confidence = role_conf
+    elif role == "ops_order_volume":
+        group = "Operational Metrics"
+        semantic_type = "Operational / Volume"
+        recommended_agg = "sum"
+        unit = "Units"
+        description = f"Order and throughput volume for {clean_label}."
+        confidence = role_conf
     elif any(k in col_lower for k in fin_keywords):
         group = "Financial Metrics"
         semantic_type = "Financial / Monetary"
@@ -277,14 +439,25 @@ def _classify_metric(col_name: str, series: pd.Series, total_rows: int) -> Metri
     )
 
 
-def _build_metrics_catalog(df: pd.DataFrame, numeric_metrics: List[str]) -> List[MetricDescriptorSchema]:
+def _build_metrics_catalog(
+    df: pd.DataFrame,
+    numeric_metrics: List[str],
+    domain_id: Optional[str] = None,
+) -> List[MetricDescriptorSchema]:
     """Build a comprehensive catalog of all available metrics in the dataset."""
     total_rows = len(df)
     catalog: List[MetricDescriptorSchema] = []
+    all_cols = [str(c) for c in df.columns]
 
     for col in numeric_metrics:
         if col in df.columns:
-            desc = _classify_metric(col, df[col], total_rows)
+            desc = _classify_metric(
+                col_name=col,
+                series=df[col],
+                total_rows=total_rows,
+                domain_id=domain_id,
+                all_columns=all_cols,
+            )
             catalog.append(desc)
 
     return catalog
@@ -341,14 +514,20 @@ def compute_trends_intelligence(
     granularity: str = "auto",
     metric: Optional[str] = None,
     category_col: Optional[str] = None,
+    domain: Optional[DomainIdentitySchema] = None,
 ) -> TrendsIntelligenceResponse:
-    """Compute comprehensive time-series trends intelligence."""
+    """Compute comprehensive time-series trends intelligence with domain awareness."""
+    # Ensure domain is available
+    if domain is None:
+        profiles = profile_dataset(df)
+        domain = detect_domain(df, profiles)
+
     time_col = _find_time_column(df)
     numeric_metrics = _find_numeric_metrics(df)
     categories = _find_categorical_dimensions(df)
 
-    # Build structured metric catalog
-    metrics_catalog = _build_metrics_catalog(df, numeric_metrics)
+    # Build structured metric catalog with domain context
+    metrics_catalog = _build_metrics_catalog(df, numeric_metrics, domain_id=domain.domain_id if domain else None)
     primary_metric_col, primary_reason = _pick_primary_metric(metrics_catalog)
 
     # If no time column exists, return graceful unsupported state
@@ -634,7 +813,14 @@ def compute_trends_intelligence(
         
         # Overall change from start to finish
         start_val = float(ts.iloc[0])
-        overall_change_pct = round(((current_val - start_val) / start_val) * 100.0, 2) if start_val != 0 else None
+        if start_val != 0:
+            overall_change_pct = round(((current_val - start_val) / start_val) * 100.0, 2)
+        elif current_val > start_val:
+            overall_change_pct = 100.0
+        elif current_val < start_val:
+            overall_change_pct = -100.0
+        else:
+            overall_change_pct = 0.0
         
         best_idx = ts.idxmax()
         best_val = float(ts.max())
@@ -743,25 +929,47 @@ def compute_trends_intelligence(
     trend_status: Literal["Increasing", "Decreasing", "Stable", "Fluctuating", "Insufficient Data"]
     if len(ts) < 2:
         trend_status = "Insufficient Data"
+        direction_val: Literal["increasing", "decreasing", "stable", "fluctuating", "insufficient_data"] = "insufficient_data"
         status_desc = "Single observation window recorded — baseline only."
+    else:
+        if overall_change_pct is not None and overall_change_pct > 3.0:
+            trend_status = "Increasing"
+            direction_val = "increasing"
+            status_desc = f"Overall upward growth (+{overall_change_pct:.1f}% across observed periods)."
+        elif overall_change_pct is not None and overall_change_pct < -3.0:
+            trend_status = "Decreasing"
+            direction_val = "decreasing"
+            status_desc = f"Overall downward contraction ({overall_change_pct:.1f}% across observed periods)."
+        elif cv > 0.45:
+            trend_status = "Fluctuating"
+            direction_val = "fluctuating"
+            status_desc = "High period-to-period variability with alternating movements."
+        else:
+            trend_status = "Stable"
+            direction_val = "stable"
+            status_desc = "Consistent performance with low variance across periods."
+
+    # Compute Domain-Aware Trend Interpretation
+    domain_interp = interpret_domain_trend(
+        metric_name=selected_desc.display_name,
+        metric_column=selected_metric,
+        direction=direction_val,
+        abs_change=abs_change,
+        pct_change=pct_change,
+        overall_change_pct=overall_change_pct,
+        current_val=current_val,
+        previous_val=previous_val,
+        all_dataset_columns=[str(c) for c in df.columns],
+        domain=domain,
+        granularity_label=gran_label,
+    )
+
+    if len(ts) < 2:
         plain_summary = (
             f"Only a single time period is available ({current_period_idx.strftime('%Y-%m-%d')} with baseline value of {current_val:,.2f}). "
             f"A period-over-period growth or decline comparison cannot be calculated without multi-period date records."
         )
     else:
-        if overall_change_pct is not None and overall_change_pct > 3.0:
-            trend_status = "Increasing"
-            status_desc = f"Overall upward growth (+{overall_change_pct:.1f}% across observed periods)."
-        elif overall_change_pct is not None and overall_change_pct < -3.0:
-            trend_status = "Decreasing"
-            status_desc = f"Overall downward contraction ({overall_change_pct:.1f}% across observed periods)."
-        elif cv > 0.45:
-            trend_status = "Fluctuating"
-            status_desc = "High period-to-period variability with alternating movements."
-        else:
-            trend_status = "Stable"
-            status_desc = "Consistent performance with low variance across periods."
-
         prev_date_str = previous_period_idx.strftime('%B %Y' if selected_granularity in ('M', 'Q', 'Y') else '%Y-%m-%d') if previous_period_idx else "prior period"
         curr_date_str = current_period_idx.strftime('%B %Y' if selected_granularity in ('M', 'Q', 'Y') else '%Y-%m-%d')
         peak_date_str = best_idx.strftime('%B %Y' if selected_granularity in ('M', 'Q', 'Y') else '%Y-%m-%d')
@@ -772,11 +980,13 @@ def compute_trends_intelligence(
             plain_summary = (
                 f"{gran_label} {selected_desc.display_name} {movement_word} from {previous_val:,.2f} in {prev_date_str} to "
                 f"{current_val:,.2f} in {curr_date_str}, {change_noun} of {abs(abs_change):,.2f} ({abs(pct_change):.1f}%). "
+                f"{domain_interp.contextual_interpretation} "
                 f"Across all {len(ts)} observed periods, the all-time peak of {best_val:,.2f} was recorded in {peak_date_str}."
             )
         else:
             plain_summary = (
                 f"{gran_label} {selected_desc.display_name} remained stable at {current_val:,.2f} in {curr_date_str}. "
+                f"{domain_interp.contextual_interpretation} "
                 f"Across all {len(ts)} observed periods, the highest recorded value was {best_val:,.2f} in {peak_date_str}."
             )
 
@@ -807,46 +1017,30 @@ def compute_trends_intelligence(
         what_tells_you.append("No historical period-over-period comparison is possible with one unique date.")
     else:
         what_tells_you.append(
-            f"Overall trajectory is {trend_status.lower()}, moving from {float(ts.iloc[0]):,.2f} at start to {current_val:,.2f} in the latest period."
+            f"Overall trajectory for {selected_desc.display_name} is {trend_status.lower()}, moving from {float(ts.iloc[0]):,.2f} at start to {current_val:,.2f} in the latest period."
         )
         what_tells_you.append(
-            f"All-time peak occurred on {best_idx.strftime('%Y-%m-%d')} ({best_val:,.2f}), while lowest level was on {worst_idx.strftime('%Y-%m-%d')} ({worst_val:,.2f})."
+            f"Contextual Domain Insight: {domain_interp.contextual_interpretation}"
+        )
+        what_tells_you.append(
+            f"All-time peak for {selected_desc.display_name} occurred on {best_idx.strftime('%Y-%m-%d')} ({best_val:,.2f}), while lowest recorded value was on {worst_idx.strftime('%Y-%m-%d')} ({worst_val:,.2f})."
         )
         if pct_change is not None:
             dir_text = "increased" if pct_change > 0 else ("decreased" if pct_change < 0 else "remained flat")
             what_tells_you.append(
-                f"In the most recent period, the metric {dir_text} by {abs(pct_change):.1f}% (change of {abs_change:+,.2f})."
+                f"In the most recent period, {selected_desc.display_name} {dir_text} by {abs(pct_change):.1f}% (net change of {abs_change:+,.2f})."
             )
         what_tells_you.append(
-            f"Metric exhibits {stability.lower()} with {len(spikes_and_drops)} statistical anomalies detected."
+            f"{selected_desc.display_name} exhibits {stability.lower()} with {len(spikes_and_drops)} statistical anomalies detected."
         )
 
-    # 4. Metric-Specific Interpretation
-    interpretation: str
-    if "Revenue" in selected_desc.semantic_type or "Performance" in selected_desc.group:
-        interpretation = (
-            f"Commercial revenue & performance analysis: Tracks financial intake trends over time. "
-            f"Monitors whether sales volume expansions translate into sustained top-line revenue."
-        )
-    elif "Operations" in selected_desc.group or "Duration" in selected_desc.semantic_type:
-        interpretation = (
-            f"Operational cycle time analysis: Evaluates operational turnaround efficiency. "
-            f"Lower values indicate faster turnaround and leaner processing cycles."
-        )
-    elif "Cost" in selected_desc.group:
-        interpretation = (
-            f"Cost & expense monitoring: Tracks financial outflows, freight, or promotional allowances. "
-            f"Analyze in tandem with transaction volume to detect cost inflation."
-        )
-    elif "Volume" in selected_desc.group:
-        interpretation = (
-            f"Volume & throughput analysis: Measures physical or transaction velocity across periods "
-            f"without conflating unit counts with monetary revenue."
-        )
-    else:
-        interpretation = (
-            f"Statistical trend analysis for {selected_desc.display_name}: Tracks descriptive movement and period variance."
-        )
+    # 4. Metric-Specific Domain Interpretation
+    interpretation_parts = [domain_interp.contextual_interpretation]
+    if domain_interp.qualification:
+        interpretation_parts.append(domain_interp.qualification)
+    if domain_interp.distinction_note:
+        interpretation_parts.append(domain_interp.distinction_note)
+    interpretation = " ".join(interpretation_parts)
 
     # Practical Answers
     if len(ts) >= 2 and previous_period_idx is not None and previous_val is not None:
@@ -856,7 +1050,7 @@ def compute_trends_intelligence(
         next_investigation = (
             f"Review underlying segments in the latest period. "
             f"Check whether leading contributors ({', '.join(categories_increased[:2]) if categories_increased else 'top categories'}) "
-            f"explain recent period movement."
+            f"explain recent period movement. {domain_interp.qualification}"
         )
     else:
         prev_txt = f"Baseline value of {current_val:,.2f} recorded on {current_period_idx.strftime('%Y-%m-%d')} (single time observation in dataset)"
@@ -868,7 +1062,7 @@ def compute_trends_intelligence(
         )
 
     practical_answers = PracticalTrendAnswersSchema(
-        metric_analyzed=f"{selected_desc.display_name} (aggregated by {gran_label} period)",
+        metric_analyzed=f"{selected_desc.display_name} ({domain_interp.metric_role}, {gran_label} period)",
         previous_value_text=prev_txt,
         current_value_text=f"{current_val:,.2f} recorded in latest period {current_period_idx.strftime('%Y-%m-%d')}",
         absolute_change_text=abs_txt,
@@ -886,6 +1080,8 @@ def compute_trends_intelligence(
         "Historical observation only. Descriptive trends reflect recorded dataset entries and do not establish external causality.",
         "Market dynamics, seasonal factors, and unrecorded variables cannot be verified from internal columns alone.",
     ]
+    if domain_interp.distinction_note:
+        limitations.append(domain_interp.distinction_note)
     if len(ts) < 12:
         limitations.append(f"Time series contains {len(ts)} periods (<12); multi-year seasonality cannot be conclusively established.")
 
@@ -899,6 +1095,7 @@ def compute_trends_intelligence(
         selected_metric=selected_metric,
         selected_metric_descriptor=selected_desc,
         metric_context=metric_context,
+        domain_interpretation=domain_interp,
         trend_summary=trend_summary,
         what_this_chart_tells_you=what_tells_you,
         metric_interpretation=interpretation,

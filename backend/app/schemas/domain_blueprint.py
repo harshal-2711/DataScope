@@ -33,6 +33,10 @@ class DomainKpiSchema(BaseModel):
     business_meaning: str = ""
     is_reliable: bool = True
     skip_reason: Optional[str] = None
+    unit: Optional[str] = None
+    formatted_value: Optional[str] = None
+    source_column: Optional[str] = None
+    formatting_rule: Optional[str] = None
 
 
 class DomainChartSpecSchema(BaseModel):
@@ -128,6 +132,9 @@ class MetricStatusSchema(BaseModel):
     category: str
     business_meaning: str
     formula: Optional[str] = None
+    unit: Optional[str] = None
+    source_column: Optional[str] = None
+    aggregation_method: Optional[str] = None
 
 
 class SectionChartSchema(BaseModel):
@@ -300,6 +307,21 @@ class MetricContextSchema(BaseModel):
     limitations: List[str] = Field(default_factory=list)
 
 
+class DomainTrendInterpretationSchema(BaseModel):
+    domain_id: str
+    domain_name: str
+    metric_name: str
+    metric_role: str
+    direction: Literal["increasing", "decreasing", "stable", "fluctuating", "insufficient_data"]
+    actual_change_text: str
+    contextual_interpretation: str
+    business_sentiment: Literal["positive", "negative", "neutral", "warning", "concern", "improvement", "informational"]
+    confidence: float = 0.85
+    confidence_level: Literal["High", "Moderate", "Neutral / Unassumed"] = "High"
+    qualification: str = ""
+    distinction_note: Optional[str] = None
+
+
 class TrendSummarySchema(BaseModel):
     trend_status: Literal["Increasing", "Decreasing", "Stable", "Fluctuating", "Insufficient Data"]
     status_description: str
@@ -330,6 +352,8 @@ class TrendsIntelligenceResponse(BaseModel):
     selected_metric: Optional[str] = None
     selected_metric_descriptor: Optional[MetricDescriptorSchema] = None
     metric_context: Optional[MetricContextSchema] = None
+    # Domain-Aware Interpretation
+    domain_interpretation: Optional[DomainTrendInterpretationSchema] = None
     # Trend Summary & Insights
     trend_summary: Optional[TrendSummarySchema] = None
     what_this_chart_tells_you: List[str] = Field(default_factory=list)
@@ -368,14 +392,28 @@ class ForecastResponse(BaseModel):
     is_available: bool
     unavailable_reason: Optional[str] = None
     metric: Optional[str] = None
+    available_metrics: List[str] = Field(default_factory=list)
     time_column: Optional[str] = None
     horizon: int = 6
+    frequency: Optional[str] = "D"
+    frequency_label: Optional[str] = "Daily"
     method_used: str = "Holt's Linear Exponential Smoothing"
     historical_points: List[HistoricalPointSchema] = Field(default_factory=list)
     forecast_points: List[ForecastPointSchema] = Field(default_factory=list)
+    historical_range: Dict[str, Any] = Field(default_factory=dict)
+    forecast_range: Dict[str, Any] = Field(default_factory=dict)
+    latest_actual: Optional[float] = None
+    final_forecast: Optional[float] = None
+    absolute_change: Optional[float] = None
     projected_growth_pct: Optional[float] = None
     accuracy_metrics: Dict[str, Optional[float]] = Field(default_factory=dict)
+    validation_summary: Dict[str, Any] = Field(default_factory=dict)
+    method_comparison: List[Dict[str, Any]] = Field(default_factory=list)
     confidence_score: float = 0.85
+    domain_interpretation: Optional[str] = None
+    unit: Optional[str] = None
+    currency_symbol: Optional[str] = None
+    horizon_warning: Optional[str] = None
     limitations: List[str] = Field(default_factory=list)
     disclaimer: str = (
         "Forecasts are mathematical extrapolations of historical patterns based on in-sample data. "

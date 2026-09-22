@@ -13,6 +13,8 @@ class ColumnInferenceSchema(BaseModel):
     unique_count: int
     sample_values: List[Any] = Field(default_factory=list)
     warnings: List[str] = Field(default_factory=list)
+    unit: Optional[str] = None
+    currency_symbol: Optional[str] = None
 
 
 class FileDiagnosticsSchema(BaseModel):
@@ -36,6 +38,7 @@ class DatasetSummary(BaseModel):
     dtypes: Dict[str, str]
     inferred_columns: List[ColumnInferenceSchema] = Field(default_factory=list)
     diagnostics: Optional[FileDiagnosticsSchema] = None
+    detected_currency: Optional[str] = None
     preview: List[Dict[str, Any]] = Field(
         description="First N rows of the dataset (N = settings.PREVIEW_ROW_COUNT)."
     )
@@ -55,6 +58,7 @@ class ColumnProfileSchema(BaseModel):
     null_count: int
     distinct_count: int
     reason: str
+    unit: Optional[str] = None
 
 
 ChartTypeLiteral = Literal["bar", "line", "pie", "histogram", "scatter"]
@@ -97,6 +101,12 @@ class KpiSchema(BaseModel):
     value: float
     kind: str
     format: str
+    unit: Optional[str] = None
+    formatted_value: Optional[str] = None
+    source_column: Optional[str] = None
+    aggregation: Optional[str] = None
+    semantic_type: Optional[str] = None
+    formatting_rule: Optional[str] = None
 
 
 class RecommendationsResponse(BaseModel):

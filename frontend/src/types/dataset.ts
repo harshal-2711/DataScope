@@ -14,6 +14,8 @@ export interface ColumnInference {
   unique_count: number
   sample_values: any[]
   warnings: string[]
+  unit?: string | null
+  currency_symbol?: string | null
 }
 
 export interface FileDiagnostics {
@@ -34,6 +36,7 @@ export interface DatasetSummary {
   dtypes: Record<string, string>
   inferred_columns?: ColumnInference[]
   diagnostics?: FileDiagnostics | null
+  detected_currency?: string | null
   preview: DatasetPreviewRow[]
 }
 
@@ -63,6 +66,7 @@ export interface ColumnProfile {
   null_count: number
   distinct_count: number
   reason: string
+  unit?: string | null
 }
 
 export type ChartType = "bar" | "line" | "pie" | "histogram" | "scatter"
@@ -102,7 +106,13 @@ export interface Kpi {
   label: string
   value: number
   kind: "sales" | "profit" | "quantity" | "discount" | "orders" | "average" | "generic"
-  format: "number" | "count"
+  format: "number" | "count" | "currency" | "percentage"
+  unit?: string | null
+  formatted_value?: string | null
+  source_column?: string | null
+  aggregation?: string | null
+  semantic_type?: string | null
+  formatting_rule?: string | null
 }
 
 export interface RecommendationsResponse {

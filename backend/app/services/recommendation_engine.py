@@ -32,9 +32,11 @@ import pandas as pd
 
 from app.core.config import settings
 from app.services.column_formatter import (
+    detect_column_unit,
     format_business_chart_title,
     format_chart_description,
     format_column_label,
+    format_metric_display,
 )
 from app.services.column_profiler import ColumnProfile, profile_dataset
 from app.services.semantic_rules import (
@@ -42,6 +44,7 @@ from app.services.semantic_rules import (
     metric_importance,
     prettify,
 )
+from app.services.type_inference import detect_dataset_currency
 
 ChartType = Literal["bar", "line", "pie", "histogram", "scatter"]
 
@@ -518,8 +521,11 @@ def rank_columns(df: pd.DataFrame) -> ColumnRanking:
     )
 
 
-def generate_recommendations(df: pd.DataFrame) -> List[ChartSpec]:
-    ranking = rank_columns(df)
+def generate_recommendations(
+    df: pd.DataFrame, ranking: Optional[ColumnRanking] = None
+) -> List[ChartSpec]:
+    if ranking is None:
+        ranking = rank_columns(df)
     top_metrics = ranking.top_metrics
     top_dimensions = ranking.top_dimensions
     important_hc_dims = ranking.important_hc_dimensions
@@ -627,6 +633,7 @@ def compute_kpis(df: pd.DataFrame, ranking: Optional[ColumnRanking] = None) -> L
 
     kpis: List[Dict[str, Any]] = []
     row_count = int(len(df))
+    dataset_currency = detect_dataset_currency(df)
 
     for col in ranking.top_metrics[:4]:
         agg = _pick_aggregation(col)
@@ -635,11 +642,21 @@ def compute_kpis(df: pd.DataFrame, ranking: Optional[ColumnRanking] = None) -> L
             continue
         value = float(series.sum()) if agg == "sum" else float(series.mean())
         label = f"Total {format_column_label(col)}" if agg == "sum" else f"Average {format_column_label(col)}"
+        
+        unit, semantic_type, sym = detect_column_unit(col, series=series, dataset_currency=dataset_currency)
+        formatted = format_metric_display(value, unit=unit, semantic_type=semantic_type, currency_symbol=sym)
+        
         kpis.append({
             "label": label,
             "value": round(value, 2),
             "kind": _kpi_kind(col),
-            "format": "number",
+            "format": "currency" if semantic_type == "currency" else ("percentage" if semantic_type == "percentage" else "number"),
+            "unit": unit,
+            "formatted_value": formatted,
+            "source_column": col,
+            "aggregation": agg,
+            "semantic_type": semantic_type,
+            "formatting_rule": f"{agg.upper()} of {col} formatted as {semantic_type} ({unit})",
         })
 
     looks_order_shaped = any(
@@ -648,21 +665,38 @@ def compute_kpis(df: pd.DataFrame, ranking: Optional[ColumnRanking] = None) -> L
     is_tender_shaped = any("tender" in c.lower() or "ocid" in c.lower() for c in df.columns)
     
     count_label = "Total Tenders" if is_tender_shaped else ("Total Orders" if looks_order_shaped else "Total Records")
+    count_unit = "tenders" if is_tender_shaped else ("orders" if looks_order_shaped else "records")
+    formatted_count = f"{row_count:,} {count_unit}"
     kpis.append({
         "label": count_label,
         "value": row_count,
         "kind": "orders",
         "format": "count",
+        "unit": count_unit,
+        "formatted_value": formatted_count,
+        "source_column": "Dataset Rows",
+        "aggregation": "count",
+        "semantic_type": "count",
+        "formatting_rule": "Total discrete record count across dataset",
     })
 
     for col in ranking.top_metrics:
         if _pick_aggregation(col) == "sum" and row_count > 0:
             total = float(df[col].dropna().sum())
+            avg_val = total / row_count
+            unit, semantic_type, sym = detect_column_unit(col, series=df[col], dataset_currency=dataset_currency)
+            formatted_avg = format_metric_display(avg_val, unit=unit, semantic_type=semantic_type, currency_symbol=sym)
             kpis.append({
                 "label": f"Average {format_column_label(col)} per Row",
-                "value": round(total / row_count, 2),
+                "value": round(avg_val, 2),
                 "kind": "average",
-                "format": "number",
+                "format": "currency" if semantic_type == "currency" else "number",
+                "unit": unit,
+                "formatted_value": formatted_avg,
+                "source_column": col,
+                "aggregation": "mean",
+                "semantic_type": semantic_type,
+                "formatting_rule": f"Average {col} per observation row",
             })
             break
 

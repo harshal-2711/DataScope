@@ -8,12 +8,24 @@ export type DomainIntelligenceState =
   | { status: "success"; data: DomainIntelligenceResponse }
   | { status: "error"; message: string }
 
+const domainIntelligenceCache = new Map<string, DomainIntelligenceResponse>()
+
 export function useDomainIntelligence(datasetId: string | null) {
-  const [state, setState] = useState<DomainIntelligenceState>({ status: "idle" })
+  const [state, setState] = useState<DomainIntelligenceState>(() => {
+    if (datasetId && domainIntelligenceCache.has(datasetId)) {
+      return { status: "success", data: domainIntelligenceCache.get(datasetId)! }
+    }
+    return { status: datasetId ? "loading" : "idle" }
+  })
 
   useEffect(() => {
     if (!datasetId) {
       setState({ status: "idle" })
+      return
+    }
+
+    if (domainIntelligenceCache.has(datasetId)) {
+      setState({ status: "success", data: domainIntelligenceCache.get(datasetId)! })
       return
     }
 
@@ -22,6 +34,7 @@ export function useDomainIntelligence(datasetId: string | null) {
 
     fetchDomainIntelligence(datasetId)
       .then((data) => {
+        domainIntelligenceCache.set(datasetId, data)
         if (!cancelled) setState({ status: "success", data })
       })
       .catch((err) => {

@@ -50,7 +50,12 @@ ColumnRole = Literal[
     "ignore",
 ]
 
+import re
+
 _IDENTIFIER_NAME_HINTS = ("id", "uuid", "guid", "key", "code", "pk")
+_DATE_PATTERN = re.compile(
+    r"^\s*(?:\d{2,4}[-/\.]\d{1,2}[-/\.]\d{1,4}|\d{4}-\d{2}-\d{2}|[A-Za-z]{3,9}\s+\d{1,2},\s*\d{4}|\d{1,2}\s+[A-Za-z]{3,9}\s+\d{4})"
+)
 
 
 @dataclass
@@ -78,8 +83,30 @@ def _parseable_datetime_ratio(series: pd.Series) -> float:
     non_null = series.dropna()
     if non_null.empty:
         return 0.0
-    parsed = pd.to_datetime(non_null, errors="coerce", format="mixed")
-    return float(parsed.notna().mean())
+    
+    # Fast sampling: check up to 50 sample values
+    sample = non_null.head(50)
+    
+    # If values are strings, do a quick pattern test before calling expensive pd.to_datetime
+    date_like = 0
+    total_checked = 0
+    for v in sample:
+        total_checked += 1
+        if isinstance(v, str):
+            if _DATE_PATTERN.search(v):
+                date_like += 1
+        elif hasattr(v, "year") or hasattr(v, "date"):
+            date_like += 1
+    
+    # If less than 40% look like dates, avoid full dateutil fallback
+    if total_checked > 0 and (date_like / total_checked) < 0.4:
+        return 0.0
+
+    try:
+        parsed = pd.to_datetime(sample, errors="coerce")
+        return float(parsed.notna().mean())
+    except Exception:
+        return 0.0
 
 
 def _looks_boolean(series: pd.Series) -> bool:
@@ -88,8 +115,11 @@ def _looks_boolean(series: pd.Series) -> bool:
     non_null = series.dropna()
     if non_null.empty:
         return False
+    sample_unique = pd.unique(non_null.head(100))
+    if len(sample_unique) > 3:
+        return False
     distinct_values = {
-        str(v).strip().lower() for v in pd.unique(non_null)
+        str(v).strip().lower() for v in sample_unique
     }
     boolean_pairs = [
         {"true", "false"},

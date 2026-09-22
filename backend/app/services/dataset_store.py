@@ -33,6 +33,7 @@ class StoredDataset:
     file_type: str
     df: pd.DataFrame
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    cache: dict[str, Any] = field(default_factory=dict)
 
 
 class DatasetStore:

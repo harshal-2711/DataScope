@@ -16,6 +16,9 @@ from typing import Any, Dict, List, Optional, Union
 import numpy as np
 import pandas as pd
 
+from app.services.column_formatter import detect_column_unit
+from app.services.type_inference import detect_dataset_currency
+
 
 def _clean_float(val: Any) -> Optional[float]:
     """Coerce value to clean JSON-serializable float or None."""
@@ -155,14 +158,24 @@ def compute_universal_statistics(df: pd.DataFrame) -> Dict[str, Any]:
     categorical_columns: Dict[str, Dict[str, Any]] = {}
     numeric_col_names: List[str] = []
 
+    dataset_currency = detect_dataset_currency(df)
+
     for col in df.columns:
         col_name = str(col)
         s = df[col]
+        unit, sem_type, sym = detect_column_unit(col_name, series=s, dataset_currency=dataset_currency)
         if pd.api.types.is_numeric_dtype(s) and not pd.api.types.is_bool_dtype(s):
-            numeric_columns[col_name] = compute_column_numeric_stats(s)
+            col_stats = compute_column_numeric_stats(s)
+            col_stats["unit"] = unit
+            col_stats["semantic_type"] = sem_type
+            col_stats["currency_symbol"] = sym
+            numeric_columns[col_name] = col_stats
             numeric_col_names.append(col_name)
         else:
-            categorical_columns[col_name] = compute_column_categorical_stats(s)
+            cat_stats = compute_column_categorical_stats(s)
+            cat_stats["unit"] = unit
+            cat_stats["semantic_type"] = sem_type
+            categorical_columns[col_name] = cat_stats
 
     # Pearson correlation matrix for numeric columns (up to 12 columns for performance)
     correlation_matrix: Dict[str, Dict[str, Optional[float]]] = {}
