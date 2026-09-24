@@ -36,7 +36,17 @@ EXCLUDE_EXTS = {
     ".pyd",
     ".DS_Store",
     ".zip",
+    ".db",
+    ".sqlite",
+    ".sqlite3",
 }
+
+EXCLUDE_EXACT_FILES = {
+    ".env",
+    "datascope.db",
+    "test.db",
+}
+
 
 
 def make_clean_zip():
@@ -56,6 +66,8 @@ def make_clean_zip():
                 file_path = Path(root) / file
                 if file_path == OUTPUT_ZIP:
                     continue
+                if file in EXCLUDE_EXACT_FILES:
+                    continue
                 if file_path.suffix.lower() in EXCLUDE_EXTS:
                     continue
                 if any(ex in file_path.parts for ex in EXCLUDE_DIRS):
@@ -67,8 +79,24 @@ def make_clean_zip():
 
     size_mb = OUTPUT_ZIP.stat().st_size / (1024 * 1024)
     print(f"Successfully packaged {file_count} files into {OUTPUT_ZIP.name} ({size_mb:.2f} MB).")
+
+    # Verify extraction in test folder
+    test_extract_dir = ROOT_DIR / ".test_extract_verify"
+    if test_extract_dir.exists():
+        import shutil
+        shutil.rmtree(test_extract_dir)
+    test_extract_dir.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(OUTPUT_ZIP, "r") as test_zip:
+        test_zip.extractall(test_extract_dir)
+        extracted_files = list(test_extract_dir.rglob("*"))
+        print(f"Extraction test passed! Extracted {len(extracted_files)} files/folders to {test_extract_dir.name}.")
+    import shutil
+    shutil.rmtree(test_extract_dir)
+    print("Cleaned up extraction verification directory.")
+
     return str(OUTPUT_ZIP)
 
 
 if __name__ == "__main__":
     make_clean_zip()
+

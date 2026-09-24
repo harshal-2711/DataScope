@@ -89,7 +89,7 @@ export function CompetitionViewer({ data, datasetId, onBenchmarkUpdated }: Compe
     return (
       <div className="space-y-6">
         {/* Availability Status Card */}
-        <Card className="border-border/60 bg-gradient-to-br from-card via-card to-muted/20 shadow-sm">
+        <Card className="border-border bg-card shadow-xs">
           <CardHeader className="pb-4">
             <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-4">
               <div className="flex items-start gap-3">
@@ -266,7 +266,7 @@ export function CompetitionViewer({ data, datasetId, onBenchmarkUpdated }: Compe
       )}
 
       {/* 1. Market Overview Header */}
-      <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between rounded-xl border border-border/60 bg-gradient-to-r from-card via-card/90 to-primary/5 p-5 shadow-sm">
+      <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between rounded-xl border border-border bg-card p-5 shadow-xs">
         <div className="space-y-1">
           <div className="flex flex-wrap items-center gap-2">
             <Badge variant="default" className="text-xs font-semibold uppercase tracking-wider bg-primary/90 text-primary-foreground">
@@ -292,8 +292,8 @@ export function CompetitionViewer({ data, datasetId, onBenchmarkUpdated }: Compe
         </div>
 
         <div className="flex items-center gap-2 shrink-0">
-          <Badge className="bg-primary/10 text-primary border-primary/20 text-xs px-3 py-1">
-            <Building2 className="h-3.5 w-3.5 mr-1.5" />
+          <Badge className="bg-secondary text-secondary-foreground border-border text-xs px-3 py-1">
+            <Building2 className="h-3.5 w-3.5 mr-1.5 text-muted-foreground" />
             {overview.total_competitors_tracked} Competitors Tracked
           </Badge>
           {!data.has_external_benchmark && (
@@ -313,14 +313,14 @@ export function CompetitionViewer({ data, datasetId, onBenchmarkUpdated }: Compe
       {/* 2. Top-Level Market Metric Cards */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         {/* Market Leader */}
-        <Card className="border-border/60 shadow-sm relative overflow-hidden bg-gradient-to-br from-emerald-500/5 to-transparent">
+        <Card className="border-border bg-card shadow-xs relative overflow-hidden">
           <CardHeader className="pb-2">
             <div className="flex items-center justify-between">
-              <span className="text-xs font-semibold uppercase tracking-wider text-emerald-600 dark:text-emerald-400 flex items-center gap-1.5">
-                <Award className="h-4 w-4" />
+              <span className="text-xs font-semibold uppercase tracking-wider text-emerald-400 flex items-center gap-1.5">
+                <Award className="h-4 w-4 text-emerald-400" />
                 Highest Reported
               </span>
-              <Badge variant="outline" className="text-[10px] text-emerald-600 border-emerald-500/30">
+              <Badge variant="outline" className="text-[10px] text-emerald-400 border-emerald-500/30">
                 Rank #1
               </Badge>
             </div>
@@ -339,7 +339,7 @@ export function CompetitionViewer({ data, datasetId, onBenchmarkUpdated }: Compe
         </Card>
 
         {/* Total Tracked Market Revenue */}
-        <Card className="border-border/60 shadow-sm relative overflow-hidden bg-gradient-to-br from-primary/5 to-transparent">
+        <Card className="border-border bg-card shadow-xs relative overflow-hidden">
           <CardHeader className="pb-2">
             <div className="flex items-center justify-between">
               <span className="text-xs font-semibold uppercase tracking-wider text-primary flex items-center gap-1.5">

@@ -8,6 +8,7 @@ original uploaded bytes are never mutated.
 
 from __future__ import annotations
 
+import datetime
 import io
 import json
 from pathlib import Path
@@ -135,17 +136,19 @@ def build_summary(
     file_type: str,
     dataset_id: str,
     diagnostics: Optional[FileDiagnostics] = None,
+    inferred: Optional[List[Any]] = None,
+    detected_currency: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Build the metadata + preview payload returned to the frontend.
 
     Uses pandas' own JSON serialization (via to_json) to safely handle
     NaN -> null and numpy scalar types -> native Python types, rather
     than hand-rolling type coercion.
-    Computes semantic type inference for all columns.
+    Computes semantic type inference for all columns if not passed.
     """
     dtypes = {str(col): str(df[col].dtype) for col in df.columns}
-    inferred = infer_dataset_types(df)
-    detected_currency = detect_dataset_currency(df)
+    inferred_cols = inferred if inferred is not None else infer_dataset_types(df)
+    currency = detected_currency if detected_currency is not None else detect_dataset_currency(df)
 
     preview_df = df.head(settings.PREVIEW_ROW_COUNT)
     preview: List[Dict[str, Any]] = json.loads(
@@ -170,29 +173,208 @@ def build_summary(
         "column_count": int(df.shape[1]),
         "columns": [str(col) for col in df.columns],
         "dtypes": dtypes,
-        "inferred_columns": [c.to_dict() for c in inferred],
+        "inferred_columns": [c.to_dict() if hasattr(c, "to_dict") else c for c in inferred_cols],
         "diagnostics": diag_dict,
-        "detected_currency": detected_currency,
+        "detected_currency": currency,
         "preview": preview,
     }
 
 
 def process_upload(
-    filename: str, contents: bytes, content_type: Optional[str]
+    filename: str,
+    contents: bytes,
+    content_type: Optional[str],
+    company_id: Optional[str] = None,
+    user_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Full validate -> read -> summarize -> store pipeline for one upload.
 
-    The parsed DataFrame is retained in the in-memory dataset store (see
-    app/services/dataset_store.py) so later requests -- chiefly the
-    recommendations endpoint -- can aggregate over the full dataset without
-    re-uploading the file. Only the dataset_id is handed back to the client.
+    The parsed DataFrame is stored into the persistent database (scoped to company)
+    and retained in the in-memory dataset cache for ultra-fast analytics.
     """
+    import uuid
     file_type = get_file_type(filename)
     validate_content_type(content_type, file_type)
     validate_size(contents)
     df, diagnostics = parse_tabular_file(contents, filename, file_type)
-    dataset_id = dataset_store.save_dataset(filename, file_type, df)
-    return build_summary(df, filename, file_type, dataset_id, diagnostics)
+
+    dataset_id = uuid.uuid4().hex
+
+    # Try storing to persistent database
+    try:
+        from app.db.session import SessionLocal
+        from app.models.audit_log import AuditLog
+        from app.models.company import Company
+        from app.models.data_record import DataRecord
+        from app.models.data_source import DataSource
+        from app.models.dataset import Dataset
+        from app.models.dataset_version import DatasetVersion
+        from app.core.supabase_client import SupabaseStorageService
+        from app.services.domain_detector import detect_domain
+
+        db = SessionLocal()
+        try:
+            # If no company_id passed, get or create default local company
+            target_company_id = company_id
+            if not target_company_id:
+                first_comp = db.query(Company).first()
+                if first_comp:
+                    target_company_id = first_comp.id
+                else:
+                    new_comp = Company(
+                        id=str(uuid.uuid4()),
+                        name="Default Workspace",
+                        slug="default-workspace",
+                        domain_type="General Business",
+                        owner_id=user_id or "system",
+                    )
+                    db.add(new_comp)
+                    db.flush()
+                    target_company_id = new_comp.id
+
+            inferred_types = infer_dataset_types(df)
+            detected_currency = detect_dataset_currency(df) or "Rs. "
+            profiles = profile_dataset(df)
+            detected_dom = detect_domain(df, profiles)
+            domain_id = detected_dom.domain_id if detected_dom else "general_business"
+            domain_name = detected_dom.name if detected_dom else "General Business"
+            now_time = datetime.datetime.now(datetime.timezone.utc)
+
+            # 1. Create DataSource entry for uploaded file
+            data_source_record = DataSource(
+                id=str(uuid.uuid4()),
+                company_id=target_company_id,
+                dataset_id=dataset_id,
+                name=filename,
+                source_type="file_upload",
+                status="active",
+                sync_frequency="manual",
+                config_json=json.dumps({"filename": filename, "file_type": file_type}),
+                is_paused=False,
+                total_records_synced=int(df.shape[0]),
+                last_sync_at=now_time,
+                created_at=now_time,
+                updated_at=now_time,
+            )
+            db.add(data_source_record)
+
+            # 2. Create Dataset record
+            new_dataset = Dataset(
+                id=dataset_id,
+                company_id=target_company_id,
+                name=filename,
+                file_type=file_type,
+                active_version_number=1,
+                current_row_count=int(df.shape[0]),
+                current_col_count=int(df.shape[1]),
+                currency_symbol=detected_currency,
+                domain_id=domain_id,
+                domain_name=domain_name,
+                created_by_id=user_id,
+                created_at=now_time,
+                updated_at=now_time,
+            )
+            db.add(new_dataset)
+
+            # 3. Create DatasetVersion snapshot
+            col_schema_json = json.dumps([c.to_dict() for c in inferred_types])
+            new_version = DatasetVersion(
+                id=str(uuid.uuid4()),
+                dataset_id=dataset_id,
+                version_number=1,
+                change_summary=f"Initial upload: {filename} ({int(df.shape[0])} rows, {int(df.shape[1])} cols)",
+                row_count=int(df.shape[0]),
+                col_count=int(df.shape[1]),
+                column_schema=col_schema_json,
+                created_by_id=user_id,
+                created_at=now_time,
+            )
+            db.add(new_version)
+            db.flush()
+
+            # 4. Insert all DataRecords using batch mappings (1,000 rows/batch)
+            raw_rows = json.loads(df.to_json(orient="records", date_format="iso"))
+            batch_size = 1000
+            for i in range(0, len(raw_rows), batch_size):
+                batch = raw_rows[i : i + batch_size]
+                bulk_mappings = [
+                    {
+                        "id": str(uuid.uuid4()),
+                        "dataset_id": dataset_id,
+                        "version_id": new_version.id,
+                        "row_index": i + offset + 1,
+                        "record_json": json.dumps(r_dict),
+                        "is_deleted": 0,
+                        "created_at": now_time,
+                        "updated_at": now_time,
+                    }
+                    for offset, r_dict in enumerate(batch)
+                ]
+                db.bulk_insert_mappings(DataRecord, bulk_mappings)
+
+            # 5. Add Audit Log
+            audit = AuditLog(
+                id=str(uuid.uuid4()),
+                company_id=target_company_id,
+                user_id=user_id,
+                action="DATASET_UPLOAD",
+                target_type="dataset",
+                target_id=dataset_id,
+                details_json=json.dumps({"filename": filename, "rows": int(df.shape[0]), "cols": int(df.shape[1])}),
+            )
+            db.add(audit)
+            db.commit()
+
+            # 6. Supabase Storage Backup & Cloud Sync
+            try:
+                csv_bytes = df.to_csv(index=False).encode("utf-8")
+                SupabaseStorageService.upload_file(
+                    bucket="datasets",
+                    path=f"{target_company_id}/{dataset_id}.csv",
+                    file_bytes=csv_bytes,
+                    content_type="text/csv",
+                )
+            except Exception:
+                pass
+
+            try:
+                from app.services.supabase_sync_service import SupabaseSyncService
+                SupabaseSyncService.sync_data_source(
+                    source_id=data_source_record.id,
+                    company_id=target_company_id,
+                    name=filename,
+                    source_type="file_upload",
+                    dataset_id=dataset_id,
+                    sync_frequency="manual",
+                    total_records=int(df.shape[0]),
+                )
+                SupabaseSyncService.sync_dataset(
+                    dataset_id=dataset_id,
+                    company_id=target_company_id,
+                    name=filename,
+                    file_type=file_type,
+                    row_count=int(df.shape[0]),
+                    col_count=int(df.shape[1]),
+                    user_id=user_id,
+                )
+            except Exception:
+                pass
+        finally:
+            db.close()
+    except Exception as err:
+        pass  # If DB isn't available, in-memory store remains resilient
+
+    dataset_store.save_dataset(filename, file_type, df, dataset_id=dataset_id)
+    return build_summary(
+        df=df,
+        filename=filename,
+        file_type=file_type,
+        dataset_id=dataset_id,
+        diagnostics=diagnostics,
+        inferred=inferred_types if "inferred_types" in locals() else None,
+        detected_currency=detected_currency if "detected_currency" in locals() else None,
+    )
+
 
 
 def get_recommendations(dataset_id: str) -> Dict[str, Any]:
@@ -610,6 +792,63 @@ def get_recommendations_intelligence(dataset_id: str) -> Dict[str, Any]:
     res_dict = res.model_dump() if hasattr(res, "model_dump") else res.dict()
     entry.cache["recommendations_intelligence"] = res_dict
     return res_dict
+
+
+def get_comprehensive_report(
+    dataset_id: str,
+    sections: Optional[List[str]] = None,
+) -> Dict[str, Any]:
+    """Return unified, multi-module executive business report for dataset."""
+    from app.services.report_engine import generate_comprehensive_report
+    entry = dataset_store.get_dataset_or_raise(dataset_id)
+    cache_key = "comprehensive_report"
+    if cache_key in entry.cache and not sections:
+        return entry.cache[cache_key]
+
+    rep = generate_comprehensive_report(dataset_id, sections)
+    rep_dict = rep.model_dump() if hasattr(rep, "model_dump") else rep.dict()
+    if not sections:
+        entry.cache[cache_key] = rep_dict
+    return rep_dict
+
+
+def export_report_docx(
+    dataset_id: str,
+    sections: Optional[List[str]] = None,
+) -> Tuple[io.BytesIO, str]:
+    """Generate Word (DOCX) document for the comprehensive report."""
+    from app.schemas.report import ComprehensiveReportResponse
+    from app.services.docx_report_generator import generate_docx_report
+    from app.services.report_engine import generate_comprehensive_report
+
+    entry = dataset_store.get_dataset_or_raise(dataset_id)
+    rep = generate_comprehensive_report(dataset_id, sections)
+    buf = generate_docx_report(rep, sections)
+
+    clean_name = "".join(c if c.isalnum() or c in ("-", "_") else "_" for c in Path(entry.filename).stem)
+    now_date = datetime.date.today().strftime("%Y%m%d")
+    filename = f"DataScope_Report_{clean_name}_{now_date}.docx"
+    return buf, filename
+
+
+def export_report_pdf(
+    dataset_id: str,
+    sections: Optional[List[str]] = None,
+) -> Tuple[io.BytesIO, str]:
+    """Generate PDF document for the comprehensive report."""
+    from app.schemas.report import ComprehensiveReportResponse
+    from app.services.pdf_report_generator import generate_pdf_report
+    from app.services.report_engine import generate_comprehensive_report
+
+    entry = dataset_store.get_dataset_or_raise(dataset_id)
+    rep = generate_comprehensive_report(dataset_id, sections)
+    buf = generate_pdf_report(rep, sections)
+
+    clean_name = "".join(c if c.isalnum() or c in ("-", "_") else "_" for c in Path(entry.filename).stem)
+    now_date = datetime.date.today().strftime("%Y%m%d")
+    filename = f"DataScope_Report_{clean_name}_{now_date}.pdf"
+    return buf, filename
+
 
 
 

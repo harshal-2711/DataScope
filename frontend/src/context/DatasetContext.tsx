@@ -2,11 +2,12 @@ import {
   createContext,
   useCallback,
   useContext,
+  useEffect,
   useMemo,
   useState,
   type ReactNode,
 } from "react"
-import { uploadDataset, clearClientApiCache } from "@/lib/datasetApi"
+import { uploadDataset, clearClientApiCache, fetchActiveCompanyDataset } from "@/lib/datasetApi"
 import type { DatasetSummary, UploadState } from "@/types/dataset"
 
 const SESSION_STORAGE_KEY = "datascope_active_dataset_summary"
@@ -53,6 +54,7 @@ export interface DatasetContextValue {
   startReplace: () => void
   cancelReplace: () => void
   removeDataset: () => void
+  refreshActiveDataset: () => Promise<void>
 }
 
 const DatasetContext = createContext<DatasetContextValue | null>(null)
@@ -70,6 +72,40 @@ export function DatasetProvider({ children }: { children: ReactNode }) {
     return initial ? { status: "success", file: null as any, summary: initial } : { status: "idle" }
   })
   const [isReplacing, setIsReplacing] = useState(false)
+
+  const refreshActiveDataset = useCallback(async () => {
+    try {
+      const res = await fetchActiveCompanyDataset()
+      if (res?.active && res?.dataset?.id) {
+        const d = res.dataset
+        const summary: DatasetSummary = {
+          dataset_id: d.id,
+          filename: d.name,
+          file_type: d.file_type || "csv",
+          row_count: d.row_count,
+          column_count: d.column_count,
+          columns: [],
+          domain_id: d.domain_id || undefined,
+          domain_name: d.domain_name || undefined,
+          currency_symbol: d.currency_symbol || "$",
+        }
+        setActiveDatasetState((prev) => {
+          if (!prev || prev.dataset_id !== summary.dataset_id) {
+            saveDatasetToSession(summary)
+            setUploadState({ status: "success", file: null as any, summary })
+            return summary
+          }
+          return prev
+        })
+      }
+    } catch {
+      // Offline or unauthenticated; fallback to session cache
+    }
+  }, [])
+
+  useEffect(() => {
+    refreshActiveDataset()
+  }, [refreshActiveDataset])
 
   const setActiveDataset = useCallback((summary: DatasetSummary | null) => {
     setActiveDatasetState(summary)
@@ -116,13 +152,14 @@ export function DatasetProvider({ children }: { children: ReactNode }) {
 
   const analyzeFile = useCallback(async (file: File) => {
     setUploadState({ status: "processing", file })
+
     try {
       const summary = await uploadDataset(file)
       setActiveDatasetState(summary)
       saveDatasetToSession(summary)
       setUploadState({ status: "success", file, summary })
       setIsReplacing(false)
-    } catch (err) {
+    } catch (err: any) {
       setUploadState({
         status: "error",
         file,
@@ -169,6 +206,7 @@ export function DatasetProvider({ children }: { children: ReactNode }) {
       startReplace,
       cancelReplace,
       removeDataset,
+      refreshActiveDataset,
     }),
     [
       activeDataset,
@@ -183,6 +221,7 @@ export function DatasetProvider({ children }: { children: ReactNode }) {
       startReplace,
       cancelReplace,
       removeDataset,
+      refreshActiveDataset,
     ]
   )
 

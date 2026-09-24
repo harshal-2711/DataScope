@@ -205,7 +205,7 @@ export function UniversalStatsViewer({ statistics }: UniversalStatsViewerProps) 
                               {colSemType.toUpperCase()}
                             </span>
                             <span className="rounded-md bg-muted px-2 py-0.5 text-[11px] font-semibold text-foreground">
-                              Unit: {colUnit}
+                              Unit: {colUnit && colUnit.toLowerCase() !== "currency" ? colUnit : (colSym || "Numeric")}
                             </span>
                           </div>
                           <span className="text-[11px] text-muted-foreground">
@@ -216,7 +216,7 @@ export function UniversalStatsViewer({ statistics }: UniversalStatsViewerProps) 
                         <div className="grid gap-3 sm:grid-cols-2 md:grid-cols-4">
                           <div className="rounded-lg border border-border/80 bg-muted/20 p-3 space-y-1">
                             <span className="text-[10px] font-semibold uppercase text-muted-foreground">
-                              Central Tendency ({colUnit})
+                              Central Tendency {colUnit && colUnit.toLowerCase() !== "currency" ? `(${colUnit})` : (colSym ? `(${colSym})` : "")}
                             </span>
                             <div className="space-y-1 text-xs pt-1">
                               <div className="flex justify-between">
@@ -242,7 +242,7 @@ export function UniversalStatsViewer({ statistics }: UniversalStatsViewerProps) 
 
                           <div className="rounded-lg border border-border/80 bg-muted/20 p-3 space-y-1">
                             <span className="text-[10px] font-semibold uppercase text-muted-foreground">
-                              Dispersion & Spread ({colUnit})
+                              Dispersion & Spread {colUnit && colUnit.toLowerCase() !== "currency" ? `(${colUnit})` : (colSym ? `(${colSym})` : "")}
                             </span>
                             <div className="space-y-1 text-xs pt-1">
                               <div className="flex justify-between">

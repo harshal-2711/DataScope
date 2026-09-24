@@ -207,7 +207,7 @@ def compute_full_risk_intelligence(
             RiskItemSchema(
                 risk_id="dq_duplicate_records",
                 title="Duplicate data records detected",
-                category="Data Quality Issue",
+                category="Data Reliability Risk",
                 label="Data hygiene issue",
                 description=f"Found {dup_count:,} duplicate rows ({dup_pct:.1f}% of the dataset).",
                 severity=severity,
@@ -250,7 +250,7 @@ def compute_full_risk_intelligence(
                     RiskItemSchema(
                         risk_id=f"dq_missing_{prof.name}",
                         title=f"High proportion of missing values in '{human_col}'",
-                        category="Data Quality Issue",
+                        category="Data Reliability Risk",
                         label="Missing data",
                         description=f"'{human_col}' is missing {null_pct:.1f}% of its values ({prof.null_count:,} unrecorded rows).",
                         severity=severity,
@@ -275,6 +275,7 @@ def compute_full_risk_intelligence(
                     )
                 )
                 seen_risk_keys.add(f"dq_missing_{prof.name}")
+
 
     # 1c. Statistical Outliers
     for prof in profiles:
@@ -301,7 +302,7 @@ def compute_full_risk_intelligence(
                             RiskItemSchema(
                                 risk_id=f"stat_outlier_{prof.name}",
                                 title=f"Unusual high values detected in '{human_col}'",
-                                category="Unusual Outlier",
+                                category="Operational Risk",
                                 label="Outlier observation",
                                 description=(
                                     f"Found {total_outliers} unusually high values in '{human_col}' exceeding "
@@ -739,7 +740,7 @@ def compute_full_risk_intelligence(
                             RiskItemSchema(
                                 risk_id=f"financial_loss_{prof.name}",
                                 title=f"Operating losses observed in '{human_col}'",
-                                category="Revenue/Profit Risk",
+                                category="Financial Risk",
                                 label="Loss observation",
                                 description=(
                                     f"Dataset contains {neg_count:,} negative entries ({neg_pct:.1f}% of records) "
@@ -784,7 +785,7 @@ def compute_full_risk_intelligence(
                             RiskItemSchema(
                                 risk_id=f"inventory_stockout_{prof.name}",
                                 title="Depleted inventory items detected",
-                                category="Operational Risk",
+                                category="Inventory Risk",
                                 label="Inventory notice",
                                 description=f"Found {zero_stock_count:,} items ({zero_stock_pct:.1f}%) with zero or negative recorded stock.",
                                 severity=severity,
@@ -850,6 +851,73 @@ def compute_full_risk_intelligence(
                             )
                         )
                         seen_risk_keys.add("hr_attrition_risk")
+
+    # 3e. High Discount Exposure vs Margin Erosion
+    disc_col = next((p.name for p in profiles if any(k in p.name.lower() for k in ("discount", "discount_pct", "markdown", "rebate")) and p.name in df.columns), None)
+    prof_col_risk = next((p.name for p in profiles if any(k in p.name.lower() for k in ("profit", "net_profit", "earnings")) and p.name in df.columns), None)
+    rev_col_risk = next((p.name for p in profiles if any(k in p.name.lower() for k in ("sales", "revenue", "amount")) and p.name in df.columns), None)
+
+    if disc_col and prof_col_risk and rev_col_risk and "discount_exposure" not in seen_risk_keys:
+        try:
+            sub_d = df[[disc_col, prof_col_risk, rev_col_risk]].dropna().copy()
+            sub_d["_disc_val"] = pd.to_numeric(sub_d[disc_col], errors="coerce")
+            sub_d["_disc_pct"] = sub_d["_disc_val"].apply(lambda v: v * 100.0 if v <= 1.0 else v)
+            sub_d["_prof_val"] = pd.to_numeric(sub_d[prof_col_risk], errors="coerce")
+            sub_d["_rev_val"] = pd.to_numeric(sub_d[rev_col_risk], errors="coerce")
+            sub_d = sub_d.dropna()
+
+            if len(sub_d) >= 20:
+                deep_disc = sub_d[sub_d["_disc_pct"] >= 30.0]
+                norm_disc = sub_d[sub_d["_disc_pct"] < 30.0]
+                if len(deep_disc) >= 5:
+                    deep_rev = deep_disc["_rev_val"].sum()
+                    deep_prof = deep_disc["_prof_val"].sum()
+                    deep_margin = (deep_prof / deep_rev * 100.0) if deep_rev > 0 else 0.0
+
+                    norm_rev = norm_disc["_rev_val"].sum()
+                    norm_prof = norm_disc["_prof_val"].sum()
+                    norm_margin = (norm_prof / norm_rev * 100.0) if norm_rev > 0 else 0.0
+
+                    if deep_margin < norm_margin - 5.0 or deep_margin < 5.0:
+                        severity = "high" if deep_margin <= 0 else "medium"
+                        deep_count = len(deep_disc)
+                        tot_count = len(sub_d)
+                        pct_exposure = (deep_count / tot_count) * 100.0
+
+                        risks.append(
+                            RiskItemSchema(
+                                risk_id="discount_exposure",
+                                title="High Discount Exposure",
+                                category="Financial Risk",
+                                label="Margin erosion",
+                                description=(
+                                    f"Transactions with discounts above 30% ({deep_count:,} orders, {pct_exposure:.1f}% of sales) "
+                                    f"generate a lower average profit margin ({deep_margin:.1f}% vs {norm_margin:.1f}% for standard orders)."
+                                ),
+                                severity=severity,
+                                severity_reason=f"Deep discounts (30%+) yield a compressed {deep_margin:.1f}% margin compared to {norm_margin:.1f}% at normal pricing.",
+                                affected_metric=prof_col_risk,
+                                affected_column=disc_col,
+                                current_value=round(deep_margin, 1),
+                                current_value_formatted=f"{deep_margin:.1f}% margin",
+                                previous_value=round(norm_margin, 1),
+                                previous_value_formatted=f"{norm_margin:.1f}% baseline margin",
+                                absolute_change=round(deep_margin - norm_margin, 1),
+                                absolute_change_formatted=f"{round(deep_margin - norm_margin, 1):+.1f}% margin",
+                                pct_change=round(pct_exposure, 1),
+                                unit="%",
+                                time_period="Full Dataset",
+                                evidence=f"{deep_count:,} orders discounted >=30% generated {deep_margin:.1f}% margin vs {norm_margin:.1f}% for <30% discounts.",
+                                why_it_matters="Possible profit erosion: deep discounts diminish bottom-line profitability without generating compensatory volume.",
+                                confidence=0.94,
+                                qualification="Calculated from empirical discount-tier vs profit margin correlation.",
+                                recommended_action="Review discount limits for low-margin products and introduce strict promotional discount caps.",
+                                risk_type="discount_exposure",
+                            )
+                        )
+                        seen_risk_keys.add("discount_exposure")
+        except Exception:
+            pass
 
     # -------------------------------------------------------------------------
     # 4. OVERVIEW SYNTHESIS & REALISTIC HEALTH STATUS

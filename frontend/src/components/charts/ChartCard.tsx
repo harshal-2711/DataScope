@@ -123,7 +123,7 @@ export function ChartCard({
                   </span>
                 )}
                 {chart.dataset_grain && (
-                  <span className="px-1.5 py-0.5 rounded bg-indigo-500/10 text-indigo-700 dark:text-indigo-300 font-medium">
+                  <span className="px-1.5 py-0.5 rounded bg-muted/70 text-muted-foreground font-medium">
                     {chart.dataset_grain}
                   </span>
                 )}

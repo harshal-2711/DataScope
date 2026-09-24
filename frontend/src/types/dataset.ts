@@ -33,11 +33,14 @@ export interface DatasetSummary {
   row_count: number
   column_count: number
   columns: string[]
-  dtypes: Record<string, string>
+  dtypes?: Record<string, string>
   inferred_columns?: ColumnInference[]
   diagnostics?: FileDiagnostics | null
   detected_currency?: string | null
-  preview: DatasetPreviewRow[]
+  domain_id?: string | null
+  domain_name?: string | null
+  currency_symbol?: string | null
+  preview?: DatasetPreviewRow[]
 }
 
 export type UploadState =

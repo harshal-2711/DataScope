@@ -4,3 +4,5 @@ python-multipart
 pandas
 openpyxl
 xlrd
+python-docx
+reportlab

@@ -44,62 +44,62 @@ const CATEGORY_ICONS: Record<RecommendationCategory, any> = {
 
 const CATEGORY_COLORS: Record<RecommendationCategory, { badge: string; textClass: string; bgClass: string }> = {
   cost_optimization: {
-    badge: "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20",
-    textClass: "text-emerald-600 dark:text-emerald-400",
+    badge: "bg-emerald-500/10 text-emerald-400 border-emerald-500/20",
+    textClass: "text-emerald-400",
     bgClass: "bg-emerald-500/5",
   },
   revenue_opportunities: {
-    badge: "bg-blue-500/10 text-blue-600 dark:text-blue-400 border-blue-500/20",
-    textClass: "text-blue-600 dark:text-blue-400",
-    bgClass: "bg-blue-500/5",
+    badge: "bg-sky-500/10 text-sky-400 border-sky-500/20",
+    textClass: "text-sky-400",
+    bgClass: "bg-sky-500/5",
   },
   risk_mitigation: {
-    badge: "bg-rose-500/10 text-rose-600 dark:text-rose-400 border-rose-500/20",
-    textClass: "text-rose-600 dark:text-rose-400",
+    badge: "bg-rose-500/10 text-rose-400 border-rose-500/20",
+    textClass: "text-rose-400",
     bgClass: "bg-rose-500/5",
   },
   performance_improvement: {
-    badge: "bg-purple-500/10 text-purple-600 dark:text-purple-400 border-purple-500/20",
-    textClass: "text-purple-600 dark:text-purple-400",
-    bgClass: "bg-purple-500/5",
+    badge: "bg-blue-500/10 text-blue-400 border-blue-500/20",
+    textClass: "text-blue-400",
+    bgClass: "bg-blue-500/5",
   },
   operational_efficiency: {
-    badge: "bg-amber-500/10 text-amber-600 dark:text-amber-400 border-amber-500/20",
-    textClass: "text-amber-600 dark:text-amber-400",
+    badge: "bg-amber-500/10 text-amber-400 border-amber-500/20",
+    textClass: "text-amber-400",
     bgClass: "bg-amber-500/5",
   },
   data_quality: {
-    badge: "bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 border-indigo-500/20",
-    textClass: "text-indigo-600 dark:text-indigo-400",
+    badge: "bg-indigo-500/10 text-indigo-400 border-indigo-500/20",
+    textClass: "text-indigo-400",
     bgClass: "bg-indigo-500/5",
   },
   market_competitive_actions: {
-    badge: "bg-cyan-500/10 text-cyan-600 dark:text-cyan-400 border-cyan-500/20",
-    textClass: "text-cyan-600 dark:text-cyan-400",
-    bgClass: "bg-cyan-500/5",
+    badge: "bg-teal-500/10 text-teal-400 border-teal-500/20",
+    textClass: "text-teal-400",
+    bgClass: "bg-teal-500/5",
   },
 }
 
 const PRIORITY_BADGES: Record<RecommendationPriority, { badge: string; label: string; borderAccent: string }> = {
   critical: {
-    badge: "bg-rose-600 text-white font-semibold uppercase tracking-wider",
-    label: "High Priority",
-    borderAccent: "border-l-rose-500 dark:border-l-rose-400",
+    badge: "bg-rose-500/15 text-rose-300 border border-rose-500/30 font-medium uppercase tracking-wider",
+    label: "Critical Priority",
+    borderAccent: "border-l-rose-500",
   },
   high: {
-    badge: "bg-amber-600 text-white font-semibold uppercase tracking-wider",
+    badge: "bg-amber-500/15 text-amber-300 border border-amber-500/30 font-medium uppercase tracking-wider",
     label: "High Priority",
-    borderAccent: "border-l-amber-500 dark:border-l-amber-400",
+    borderAccent: "border-l-amber-500",
   },
   medium: {
-    badge: "bg-blue-600 text-white font-medium uppercase tracking-wider",
+    badge: "bg-blue-500/15 text-blue-300 border border-blue-500/30 font-medium uppercase tracking-wider",
     label: "Medium Priority",
-    borderAccent: "border-l-blue-500 dark:border-l-blue-400",
+    borderAccent: "border-l-blue-500",
   },
   low: {
-    badge: "bg-slate-600 text-slate-100 font-normal uppercase tracking-wider",
+    badge: "bg-secondary text-muted-foreground border border-border font-normal uppercase tracking-wider",
     label: "Low Priority",
-    borderAccent: "border-l-slate-400 dark:border-l-slate-600",
+    borderAccent: "border-l-muted-foreground",
   },
 }
 
@@ -142,7 +142,7 @@ export function RecommendationsViewer({ data }: RecommendationsViewerProps) {
   if (!data.is_available || recommendations.length === 0) {
     return (
       <div className="space-y-6">
-        <Card className="border-border/60 bg-gradient-to-br from-card via-card to-muted/20 shadow-sm">
+        <Card className="border-border bg-card shadow-xs">
           <CardHeader className="pb-4">
             <div className="flex items-start gap-3">
               <div className="rounded-lg bg-amber-500/10 p-2.5 text-amber-500 mt-0.5">
@@ -189,15 +189,15 @@ export function RecommendationsViewer({ data }: RecommendationsViewerProps) {
     <div className="space-y-8">
       {/* 1. TOP EXECUTIVE STATS */}
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <Card className="border-border/60 bg-gradient-to-br from-card to-card/60 shadow-sm hover:shadow-md transition-all">
+        <Card className="border-border bg-card shadow-xs">
           <CardHeader className="flex flex-row items-center justify-between pb-2">
             <CardTitle className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
               Total Recommendations
             </CardTitle>
-            <Target className="h-4 w-4 text-primary" />
+            <Target className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold tracking-tight">{overview.total_recommendations}</div>
+            <div className="text-2xl font-bold tracking-tight text-foreground">{overview.total_recommendations}</div>
             <p className="text-xs text-muted-foreground mt-1 flex items-center gap-1.5">
               <span className="inline-block h-1.5 w-1.5 rounded-full bg-emerald-500" />
               Prioritized by potential business impact
@@ -205,7 +205,7 @@ export function RecommendationsViewer({ data }: RecommendationsViewerProps) {
           </CardContent>
         </Card>
 
-        <Card className="border-border/60 bg-gradient-to-br from-card to-card/60 shadow-sm hover:shadow-md transition-all">
+        <Card className="border-border bg-card shadow-xs">
           <CardHeader className="flex flex-row items-center justify-between pb-2">
             <CardTitle className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
               High Priority
@@ -222,7 +222,7 @@ export function RecommendationsViewer({ data }: RecommendationsViewerProps) {
           </CardContent>
         </Card>
 
-        <Card className="border-border/60 bg-gradient-to-br from-card to-card/60 shadow-sm hover:shadow-md transition-all">
+        <Card className="border-border bg-card shadow-xs">
           <CardHeader className="flex flex-row items-center justify-between pb-2">
             <CardTitle className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
               Verified Calculations
@@ -239,15 +239,15 @@ export function RecommendationsViewer({ data }: RecommendationsViewerProps) {
           </CardContent>
         </Card>
 
-        <Card className="border-border/60 bg-gradient-to-br from-card to-card/60 shadow-sm hover:shadow-md transition-all">
+        <Card className="border-border bg-card shadow-xs">
           <CardHeader className="flex flex-row items-center justify-between pb-2">
             <CardTitle className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
               Medium / Advisory
             </CardTitle>
-            <Sparkles className="h-4 w-4 text-blue-500" />
+            <Sparkles className="h-4 w-4 text-sky-500" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold tracking-tight text-blue-500">
+            <div className="text-2xl font-bold tracking-tight text-foreground">
               {overview.medium_count + overview.low_count}
             </div>
             <p className="text-xs text-muted-foreground mt-1">
@@ -258,11 +258,11 @@ export function RecommendationsViewer({ data }: RecommendationsViewerProps) {
       </div>
 
       {/* 2. EXECUTIVE SUMMARY */}
-      <Card className="border-border/60 bg-card/60 backdrop-blur-sm shadow-sm">
+      <Card className="border-border bg-card shadow-xs">
         <CardHeader className="pb-3">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2">
-              <Lightbulb className="h-4 w-4 text-primary" />
+              <Lightbulb className="h-4 w-4 text-muted-foreground" />
               <CardTitle className="text-sm font-semibold">Executive Overview</CardTitle>
             </div>
             <Badge variant="outline" className="text-xs font-normal">
@@ -370,7 +370,7 @@ export function RecommendationsViewer({ data }: RecommendationsViewerProps) {
               return (
                 <Card
                   key={rec.rec_id}
-                  className={`border-border/60 bg-gradient-to-br from-card via-card to-muted/10 shadow-sm transition-all hover:border-border hover:shadow-md border-l-4 ${prioConfig.borderAccent}`}
+                  className={`border-border bg-card shadow-xs transition-all hover:border-border hover:bg-card/90 border-l-4 ${prioConfig.borderAccent}`}
                 >
                   {/* Card Header: Priority, Title, Quick Meta */}
                   <CardHeader className="pb-3 pt-5 px-6">
@@ -418,7 +418,7 @@ export function RecommendationsViewer({ data }: RecommendationsViewerProps) {
                           <Button asChild size="sm" variant="outline" className="h-8 gap-1.5 text-xs">
                             <Link to={rec.suggested_investigation_route}>
                               <span>{rec.suggested_investigation_label || "View Details"}</span>
-                              <ArrowUpRight className="h-3.5 w-3.5 text-primary" />
+                              <ArrowUpRight className="h-3.5 w-3.5 text-muted-foreground" />
                             </Link>
                           </Button>
                         </div>
@@ -433,7 +433,7 @@ export function RecommendationsViewer({ data }: RecommendationsViewerProps) {
                         {rec.key_metrics.slice(0, 4).map((metric, mIdx) => (
                           <div
                             key={mIdx}
-                            className="rounded-lg border border-border/50 bg-background/70 px-3 py-2 text-left"
+                            className="rounded-lg border border-border bg-secondary/30 px-3 py-2 text-left"
                           >
                             <span className="text-[11px] font-medium text-muted-foreground block truncate">
                               {metric.label}
@@ -449,7 +449,7 @@ export function RecommendationsViewer({ data }: RecommendationsViewerProps) {
                     {/* TWO-COLUMN CORE CONTENT: WHAT WE FOUND + WHAT YOU SHOULD DO */}
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-1">
                       {/* Left: What We Found & Why It Matters */}
-                      <div className="rounded-lg border border-border/50 bg-background/50 p-4 space-y-3">
+                      <div className="rounded-lg border border-border bg-secondary/20 p-4 space-y-3">
                         <div className="space-y-2">
                           <h4 className="text-xs font-bold uppercase tracking-wider text-muted-foreground flex items-center gap-1.5">
                             <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500" />
@@ -458,7 +458,7 @@ export function RecommendationsViewer({ data }: RecommendationsViewerProps) {
                           <ul className="space-y-1.5 text-xs text-foreground/90">
                             {findings.map((finding, fIdx) => (
                               <li key={fIdx} className="flex items-start gap-2">
-                                <span className="text-primary font-bold mt-0.5">•</span>
+                                <span className="text-muted-foreground font-bold mt-0.5">•</span>
                                 <span className="leading-relaxed">{finding}</span>
                               </li>
                             ))}
@@ -478,15 +478,15 @@ export function RecommendationsViewer({ data }: RecommendationsViewerProps) {
                       </div>
 
                       {/* Right: What You Should Do */}
-                      <div className="rounded-lg border border-border/50 bg-background/50 p-4 space-y-3">
-                        <h4 className="text-xs font-bold uppercase tracking-wider text-primary flex items-center gap-1.5">
-                          <Lightbulb className="h-3.5 w-3.5 text-primary" />
+                      <div className="rounded-lg border border-border bg-secondary/20 p-4 space-y-3">
+                        <h4 className="text-xs font-bold uppercase tracking-wider text-foreground flex items-center gap-1.5">
+                          <Lightbulb className="h-3.5 w-3.5 text-amber-500" />
                           What You Should Do:
                         </h4>
                         <ol className="space-y-2 text-xs text-foreground font-medium">
                           {actionSteps.map((step, sIdx) => (
                             <li key={sIdx} className="flex items-start gap-2.5">
-                              <span className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-primary/10 text-[11px] font-bold text-primary">
+                              <span className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-secondary text-[11px] font-bold text-foreground">
                                 {sIdx + 1}
                               </span>
                               <span className="leading-relaxed pt-0.5">{step}</span>
@@ -497,10 +497,10 @@ export function RecommendationsViewer({ data }: RecommendationsViewerProps) {
                     </div>
 
                     {/* EXPECTED RESULT BANNER */}
-                    <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/5 px-4 py-2.5 flex items-center gap-2.5">
-                      <Target className="h-4 w-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
+                    <div className="rounded-lg border border-border bg-secondary/30 px-4 py-2.5 flex items-center gap-2.5">
+                      <Target className="h-4 w-4 text-emerald-400 shrink-0" />
                       <div className="text-xs">
-                        <strong className="text-emerald-700 dark:text-emerald-300 font-semibold mr-1.5">
+                        <strong className="text-emerald-400 font-semibold mr-1.5">
                           Expected Result:
                         </strong>
                         <span className="text-foreground/90 font-medium">

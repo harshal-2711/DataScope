@@ -22,24 +22,24 @@ function getTypeBadgeColor(inferredType: string) {
   switch (inferredType) {
     case "Date":
     case "Datetime":
-      return "bg-purple-500/10 text-purple-700 border-purple-200 dark:text-purple-300 dark:border-purple-800"
+      return "bg-secondary text-foreground border-border"
     case "Currency":
-      return "bg-emerald-500/10 text-emerald-700 border-emerald-200 dark:text-emerald-300 dark:border-emerald-800"
+      return "bg-emerald-500/10 text-emerald-400 border-emerald-500/20"
     case "Percentage":
-      return "bg-cyan-500/10 text-cyan-700 border-cyan-200 dark:text-cyan-300 dark:border-cyan-800"
+      return "bg-sky-500/10 text-sky-400 border-sky-500/20"
     case "Integer":
     case "Float":
-      return "bg-amber-500/10 text-amber-700 border-amber-200 dark:text-amber-300 dark:border-amber-800"
+      return "bg-amber-500/10 text-amber-400 border-amber-500/20"
     case "Category":
-      return "bg-indigo-500/10 text-indigo-700 border-indigo-200 dark:text-indigo-300 dark:border-indigo-800"
+      return "bg-secondary text-foreground border-border"
     case "Identifier":
-      return "bg-slate-500/10 text-slate-700 border-slate-200 dark:text-slate-300 dark:border-slate-800"
+      return "bg-secondary text-muted-foreground border-border"
     case "Duration":
-      return "bg-orange-500/10 text-orange-700 border-orange-200 dark:text-orange-300 dark:border-orange-800"
+      return "bg-orange-500/10 text-orange-400 border-orange-500/20"
     case "Timestamp":
-      return "bg-blue-500/10 text-blue-700 border-blue-200 dark:text-blue-300 dark:border-blue-800"
+      return "bg-secondary text-foreground border-border"
     case "Boolean":
-      return "bg-teal-500/10 text-teal-700 border-teal-200 dark:text-teal-300 dark:border-teal-800"
+      return "bg-teal-500/10 text-teal-400 border-teal-500/20"
     default:
       return "bg-muted text-muted-foreground border-border"
   }
@@ -134,7 +134,7 @@ export function DatasetPreviewTable({ summary }: { summary: DatasetSummary }) {
               onClick={() => setActiveTab("rows")}
             >
               <TableIcon className="h-3.5 w-3.5" />
-              Raw Rows ({summary.preview.length})
+              Raw Rows ({(summary.preview || []).length})
             </Button>
           </div>
         </CardHeader>
@@ -158,7 +158,7 @@ export function DatasetPreviewTable({ summary }: { summary: DatasetSummary }) {
               <tbody className="divide-y">
                 {summary.columns.map((colName) => {
                   const inf = inferredMap.get(colName)
-                  const originalType = summary.dtypes[colName] || "unknown"
+                  const originalType = (summary.dtypes && summary.dtypes[colName]) || "unknown"
                   const inferredType = inf ? inf.inferred_type : originalType
                   const confidence = inf ? Math.round(inf.confidence * 100) : 100
                   const missingCount = inf ? inf.missing_count : 0
@@ -242,7 +242,7 @@ export function DatasetPreviewTable({ summary }: { summary: DatasetSummary }) {
                 <tr className="border-y bg-muted/40">
                   {summary.columns.map((col) => {
                     const inf = inferredMap.get(col)
-                    const inferredType = inf ? inf.inferred_type : summary.dtypes[col]
+                    const inferredType = inf ? inf.inferred_type : ((summary.dtypes && summary.dtypes[col]) || "string")
                     return (
                       <th
                         key={col}
@@ -263,7 +263,7 @@ export function DatasetPreviewTable({ summary }: { summary: DatasetSummary }) {
                 </tr>
               </thead>
               <tbody className="divide-y">
-                {summary.preview.map((row, i) => (
+                {(summary.preview || []).map((row, i) => (
                   <tr key={i} className="hover:bg-muted/30 transition-colors">
                     {summary.columns.map((col) => (
                       <td

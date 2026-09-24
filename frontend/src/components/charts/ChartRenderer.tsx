@@ -22,8 +22,8 @@ const AXIS_TICK_STYLE = { fontSize: 12, fill: "var(--muted-foreground)" }
 const CHART_MARGIN = { top: 8, right: 12, left: 4, bottom: 8 }
 const ANIMATION_DURATION = 400
 
-const HISTOGRAM_COLOR = "#2dd4bf" // bright teal, per "distribution -> green/teal" convention
-const SCATTER_COLOR = "#c084fc" // vivid violet, per "relationship -> cyan/purple" convention
+const HISTOGRAM_COLOR = "#38bdf8"
+const SCATTER_COLOR = "#60a5fa"
 const RANGE_DASH = "\u2013"
 
 function truncateLabel(value: unknown, max = 14): string {

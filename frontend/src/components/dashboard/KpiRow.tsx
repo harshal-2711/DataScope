@@ -72,14 +72,8 @@ export function KpiRow({ kpis }: { kpis: Kpi[] }) {
         return (
           <Card
             key={`${kpi.label}-${index}`}
-            className="group relative gap-3 overflow-visible py-4 transition-all hover:border-primary/50 hover:shadow-sm"
+            className="group relative gap-3 overflow-visible py-4 transition-all hover:border-border hover:bg-card/80"
           >
-            <div
-              className="pointer-events-none absolute inset-0 opacity-0 transition-opacity duration-300 group-hover:opacity-100 rounded-xl"
-              style={{
-                background: `radial-gradient(140px circle at 20% 0%, ${colors.hex}18, transparent 70%)`,
-              }}
-            />
             <CardContent className="relative px-4">
               <div className="flex items-start justify-between gap-2">
                 <div className="flex items-center gap-2.5 min-w-0">

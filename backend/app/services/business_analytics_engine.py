@@ -80,6 +80,62 @@ def _format_number(val: Optional[float]) -> str:
     return f"{val:,.1f}".rstrip("0").rstrip(".")
 
 
+_INVALID_BUSINESS_DIMENSIONS = {
+    "order_date", "date", "time", "timestamp", "created_at", "updated_at",
+    "customer_id", "user_id", "order_id", "transaction_id", "id", "sku_id",
+    "invoice_id", "row_id", "index", "phone", "email", "address", "zip", "postal", "zip_code",
+}
+
+
+def _find_business_dimension(
+    df: pd.DataFrame,
+    profiles: List[ColumnProfile],
+    keywords: Tuple[str, ...],
+) -> Optional[str]:
+    """Find the best categorical column that represents a genuine business dimension (Product, Category, Region, Segment, etc.).
+    Strictly avoids Dates, Times, Timestamps, IDs, and high-cardinality technical hashes.
+    """
+    best_col: Optional[str] = None
+    best_score = 0.0
+
+    for prof in profiles:
+        if prof.role not in ("categorical", "nominal", "identifier"):
+            continue
+        col_clean = prof.name.lower().strip().replace("-", "_").replace(" ", "_")
+        tokens = set(col_clean.split("_"))
+
+        # Explicitly reject invalid dimensions (dates, times, ids)
+        if col_clean in _INVALID_BUSINESS_DIMENSIONS or tokens & _INVALID_BUSINESS_DIMENSIONS:
+            continue
+        if any(t in tokens for t in ("date", "time", "timestamp", "hour", "minute", "second")):
+            continue
+        if col_clean.endswith("_id") or col_clean.endswith("id") and len(col_clean) > 2 and "valid" not in col_clean:
+            continue
+
+        # Check cardinality
+        distinct_count = prof.distinct_count or (df[prof.name].nunique() if prof.name in df.columns else 0)
+        if distinct_count < 2 or distinct_count > 500:
+            continue
+        if len(df) > 10 and distinct_count >= len(df) * 0.95:
+            continue
+
+        score = 0.0
+        for kw in keywords:
+            kw_clean = kw.lower()
+            if kw_clean == col_clean:
+                score += 10.0
+            elif kw_clean in tokens:
+                score += 5.0
+            elif kw_clean in col_clean:
+                score += 2.5
+
+        if score > best_score:
+            best_score = score
+            best_col = prof.name
+
+    return best_col
+
+
 def _find_col(
     df: pd.DataFrame,
     profiles: List[ColumnProfile],
@@ -116,6 +172,7 @@ def _find_col(
             best_col = prof.name
 
     return best_col
+
 
 
 def generate_decision_dashboard(
@@ -450,28 +507,43 @@ def _build_sales_dashboard(
     profit_col = _find_col(df, profiles, ("profit", "net_profit", "earnings", "margin_amount"), "numeric")
     discount_col = _find_col(df, profiles, ("discount", "discount_amount", "discount_pct", "rebate"), "numeric")
     order_col = _find_col(df, profiles, ("order_id", "order_number", "transaction_id", "invoice_id", "id"))
-    product_col = _find_col(df, profiles, ("product_name", "product", "item_name", "item", "sku", "title"), "categorical")
-    category_col = _find_col(df, profiles, ("category", "product_category", "department", "sub_category", "segment"), "categorical")
-    region_col = _find_col(df, profiles, ("region", "country", "state", "city", "store", "territory", "location"), "categorical")
+
+    # Strictly use valid business dimensions (never dates, times, or raw IDs)
+    product_col = _find_business_dimension(df, profiles, ("product_name", "product", "item_name", "item", "sku", "title", "model"))
+    category_col = _find_business_dimension(df, profiles, ("category", "product_category", "department", "sub_category", "segment", "line_of_business"))
+    region_col = _find_business_dimension(df, profiles, ("region", "country", "state", "city", "store", "territory", "location", "market"))
     stock_col = _find_col(df, profiles, ("stock", "inventory", "stock_level", "units_in_stock", "available_quantity"), "numeric")
-    date_col = _find_col(df, profiles, ("order_date", "date", "created_at", "transaction_date", "time"), "temporal")
+    date_col = _find_col(df, profiles, ("order_date", "date", "created_at", "transaction_date"), "temporal")
 
     total_rev = _clean_num(df[rev_col].sum()) if rev_col else None
     total_qty = _clean_num(df[qty_col].sum()) if qty_col else None
     total_orders = int(df[order_col].nunique()) if order_col else row_count
     aov = _clean_num(total_rev / total_orders) if total_rev and total_orders > 0 else None
 
+    # Calculate Average Discount when available
+    avg_discount: Optional[float] = None
+    if discount_col and discount_col in df.columns:
+        disc_s = pd.to_numeric(df[discount_col], errors="coerce").dropna()
+        if len(disc_s) > 0:
+            raw_mean = float(disc_s.mean())
+            avg_discount = _clean_num(raw_mean * 100.0 if raw_mean <= 1.0 else raw_mean)
+
     has_profit = False
     total_profit: Optional[float] = None
+    total_loss: Optional[float] = None
     profit_margin: Optional[float] = None
     profit_explanation = ""
 
-    if profit_col:
-        total_profit = _clean_num(df[profit_col].sum())
+    if profit_col and profit_col in df.columns:
+        prof_s = pd.to_numeric(df[profit_col], errors="coerce").dropna()
+        total_profit = _clean_num(prof_s.sum())
         has_profit = True
+        neg_profits = prof_s[prof_s < 0]
+        if len(neg_profits) > 0:
+            total_loss = _clean_num(abs(neg_profits.sum()))
         profit_margin = _clean_num((total_profit / total_rev) * 100.0) if total_rev and total_rev > 0 else None
-        profit_explanation = f"Calculated from '{profit_col}' column."
-    elif cost_col and rev_col:
+        profit_explanation = f"Calculated directly from '{profit_col}' across all recorded transactions."
+    elif cost_col and rev_col and cost_col in df.columns and rev_col in df.columns:
         total_cost = _clean_num(df[cost_col].sum())
         if total_cost is not None and total_rev is not None:
             total_profit = _clean_num(total_rev - total_cost)
@@ -479,7 +551,7 @@ def _build_sales_dashboard(
             profit_margin = _clean_num((total_profit / total_rev) * 100.0) if total_rev > 0 else None
             profit_explanation = f"Calculated as Revenue ('{rev_col}') minus Cost ('{cost_col}')."
     else:
-        profit_explanation = "Profit and profit margin cannot be calculated because the dataset lacks reliable cost (COGS) or net profit columns. Displaying top-line revenue metrics only."
+        profit_explanation = "Reliable profit and loss analysis is unavailable because sufficient financial fields (profit or cost/expense data) were not found in the dataset."
 
     exec_metrics = [
         MetricStatusSchema(
@@ -495,25 +567,14 @@ def _build_sales_dashboard(
         ),
         MetricStatusSchema(
             id="total_orders",
-            name="Total Orders",
+            name="Total Orders / Transactions",
             value=total_orders,
             formatted_value=_format_number(total_orders),
             status="Calculated" if order_col else "Estimated",
             explanation=f"Distinct count of '{order_col}'." if order_col else "Estimated as total transaction rows.",
             category="executive",
-            business_meaning="Total commercial transaction count.",
+            business_meaning="Total commercial transaction volume.",
             formula=f"COUNT(DISTINCT {order_col})" if order_col else "COUNT(*)",
-        ),
-        MetricStatusSchema(
-            id="units_sold",
-            name="Units Sold",
-            value=total_qty,
-            formatted_value=_format_number(total_qty),
-            status="Calculated" if qty_col else "Unavailable",
-            explanation=f"Sum of quantity column '{qty_col}'." if qty_col else "No quantity/units column found.",
-            category="executive",
-            business_meaning="Total physical volume of items moved.",
-            formula=f"SUM({qty_col})" if qty_col else None,
         ),
         MetricStatusSchema(
             id="aov",
@@ -523,32 +584,103 @@ def _build_sales_dashboard(
             status="Calculated" if aov is not None else "Unavailable",
             explanation="Total revenue divided by total orders." if aov is not None else "Requires revenue and order counts.",
             category="executive",
-            business_meaning="Average monetary expenditure per customer checkout.",
+            business_meaning="Average customer expenditure per commercial transaction.",
             formula="Total Revenue / Total Orders",
         ),
         MetricStatusSchema(
-            id="net_profit",
-            name="Net Profit",
-            value=total_profit,
-            formatted_value=_format_currency(total_profit) if has_profit else "N/A",
-            status="Calculated" if has_profit else "Unavailable",
-            explanation=profit_explanation,
-            category="profitability",
-            business_meaning="Net bottom-line financial earnings.",
-            formula="Revenue - Cost" if has_profit else None,
-        ),
-        MetricStatusSchema(
-            id="profit_margin",
-            name="Profit Margin",
-            value=profit_margin,
-            formatted_value=f"{profit_margin:.1f}%" if profit_margin is not None else "N/A",
-            status="Calculated" if profit_margin is not None else "Unavailable",
-            explanation=profit_explanation,
-            category="profitability",
-            business_meaning="Percentage of revenue retained as profit.",
-            formula="(Net Profit / Total Revenue) * 100",
+            id="units_sold",
+            name="Units Sold",
+            value=total_qty,
+            formatted_value=_format_number(total_qty),
+            status="Calculated" if qty_col else "Unavailable",
+            explanation=f"Sum of quantity column '{qty_col}'." if qty_col else "No quantity/units column found.",
+            category="executive",
+            business_meaning="Total physical volume of items sold.",
+            formula=f"SUM({qty_col})" if qty_col else None,
         ),
     ]
+
+    if avg_discount is not None:
+        exec_metrics.append(
+            MetricStatusSchema(
+                id="avg_discount",
+                name="Average Discount Rate",
+                value=avg_discount,
+                formatted_value=f"{avg_discount:.1f}%",
+                status="Calculated",
+                explanation=f"Average promotional discount applied ('{discount_col}').",
+                category="executive",
+                business_meaning="Mean promotional reduction on catalogue prices.",
+            )
+        )
+
+    if has_profit:
+        exec_metrics.append(
+            MetricStatusSchema(
+                id="net_profit",
+                name="Total Net Profit",
+                value=total_profit,
+                formatted_value=_format_currency(total_profit),
+                status="Calculated",
+                explanation=profit_explanation,
+                category="profitability",
+                business_meaning="Net bottom-line financial earnings after operating costs.",
+                formula=f"SUM({profit_col})" if profit_col else "Revenue - Cost",
+            )
+        )
+        exec_metrics.append(
+            MetricStatusSchema(
+                id="profit_margin",
+                name="Profit Margin",
+                value=profit_margin,
+                formatted_value=f"{profit_margin:.1f}%" if profit_margin is not None else "N/A",
+                status="Calculated" if profit_margin is not None else "Unavailable",
+                explanation=profit_explanation,
+                category="profitability",
+                business_meaning="Percentage of gross revenue converted to bottom-line profit.",
+                formula="(Net Profit / Total Revenue) * 100",
+            )
+        )
+        if total_loss and total_loss > 0:
+            exec_metrics.append(
+                MetricStatusSchema(
+                    id="total_loss",
+                    name="Identified Unprofitable Losses",
+                    value=total_loss,
+                    formatted_value=_format_currency(total_loss),
+                    status="Calculated",
+                    explanation="Sum of negative margins on unprofitable orders/products.",
+                    category="profitability",
+                    business_meaning="Direct margin erosion from loss-making transactions.",
+                )
+            )
+    else:
+        exec_metrics.append(
+            MetricStatusSchema(
+                id="net_profit",
+                name="Total Net Profit",
+                value=None,
+                formatted_value="Unavailable",
+                status="Unavailable",
+                explanation=profit_explanation,
+                category="profitability",
+                business_meaning="Net bottom-line financial earnings after operating costs.",
+                formula=None,
+            )
+        )
+        exec_metrics.append(
+            MetricStatusSchema(
+                id="profit_margin",
+                name="Profit Margin",
+                value=None,
+                formatted_value="Unavailable",
+                status="Unavailable",
+                explanation=profit_explanation,
+                category="profitability",
+                business_meaning="Percentage of gross revenue converted to bottom-line profit.",
+                formula=None,
+            )
+        )
 
     sales_charts: List[SectionChartSchema] = []
     if rev_col and date_col:
@@ -567,76 +699,150 @@ def _build_sales_dashboard(
                     sales_charts.append(
                         SectionChartSchema(
                             id="revenue_trend",
-                            title="Revenue Trend Over Time",
+                            title="Monthly Sales Revenue Trend",
                             business_question="How is sales revenue trending across operating periods?",
                             chart_type="line",
                             metric="Revenue",
                             grouping="Date",
-                            explanation="Tracks historical revenue trajectory to detect growth periods, seasonality, and sudden sales drops.",
+                            explanation="Tracks chronological sales revenue to identify seasonal patterns, growth acceleration, and demand drops.",
                             data=chart_data,
-                            x_label="Date",
+                            x_label="Period",
                             y_label="Revenue ($)",
                         )
                     )
         except Exception:
             pass
 
-    if rev_col and category_col:
-        cat_grouped = df.groupby(category_col)[rev_col].sum().sort_values(ascending=False).head(10)
+    primary_dimension = category_col or region_col
+    if rev_col and primary_dimension:
+        cat_grouped = df.groupby(primary_dimension)[rev_col].sum().sort_values(ascending=False).head(10)
         sales_charts.append(
             SectionChartSchema(
-                id="sales_by_category",
-                title="Revenue by Product Category",
-                business_question="Which product categories generate the highest share of sales?",
+                id="sales_by_dimension",
+                title=f"Revenue by {prettify(primary_dimension)}",
+                business_question=f"Which {prettify(primary_dimension).lower()}s generate the highest commercial revenue?",
                 chart_type="bar",
                 metric="Revenue",
-                grouping="Category",
-                explanation="Ranks product categories by gross revenue to guide inventory allocation and commercial focus.",
+                grouping=prettify(primary_dimension),
+                explanation=f"Ranks {prettify(primary_dimension).lower()}s by total revenue contribution to guide resource and inventory allocation.",
                 data=[{"x": str(idx), "y": _clean_num(val)} for idx, val in cat_grouped.items()],
-                x_label="Category",
+                x_label=prettify(primary_dimension),
                 y_label="Total Revenue ($)",
             )
         )
 
+    # Profitability Charts
+    profit_charts: List[SectionChartSchema] = []
+    if has_profit:
+        target_dim = category_col or product_col or region_col
+        if target_dim and profit_col and profit_col in df.columns:
+            p_grp = df.groupby(target_dim)[profit_col].sum().sort_values(ascending=False)
+            top_p = p_grp.head(8)
+            profit_charts.append(
+                SectionChartSchema(
+                    id="profit_by_dimension",
+                    title=f"Net Profit by {prettify(target_dim)}",
+                    business_question=f"Which {prettify(target_dim).lower()}s drive the strongest bottom-line profitability?",
+                    chart_type="bar",
+                    metric="Profit",
+                    grouping=prettify(target_dim),
+                    explanation=f"Identifies high-margin {prettify(target_dim).lower()}s generating the greatest net cash flow.",
+                    data=[{"x": str(idx), "y": _clean_num(val)} for idx, val in top_p.items()],
+                    x_label=prettify(target_dim),
+                    y_label="Net Profit ($)",
+                )
+            )
+
+            neg_p = p_grp[p_grp < 0].sort_values()
+            if len(neg_p) > 0:
+                profit_charts.append(
+                    SectionChartSchema(
+                        id="loss_by_dimension",
+                        title=f"Loss-Making {prettify(target_dim)}s",
+                        business_question=f"Which {prettify(target_dim).lower()}s are generating net financial losses?",
+                        chart_type="bar",
+                        metric="Loss ($)",
+                        grouping=prettify(target_dim),
+                        explanation=f"Highlights loss-making {prettify(target_dim).lower()}s that require price restructuring, vendor renegotiation, or discontinuation.",
+                        data=[{"x": str(idx), "y": _clean_num(val)} for idx, val in neg_p.items()],
+                        x_label=prettify(target_dim),
+                        y_label="Net Loss ($)",
+                    )
+                )
+
+        if discount_col and profit_col and rev_col and discount_col in df.columns and profit_col in df.columns:
+            try:
+                # Group by discount bracket
+                df_disc = df[[discount_col, profit_col, rev_col]].dropna().copy()
+                df_disc["_disc_pct"] = pd.to_numeric(df_disc[discount_col], errors="coerce")
+                df_disc["_disc_pct"] = df_disc["_disc_pct"].apply(lambda v: v * 100.0 if v <= 1.0 else v)
+                df_disc["_bracket"] = pd.cut(
+                    df_disc["_disc_pct"],
+                    bins=[-1, 0, 10, 20, 30, 100],
+                    labels=["0% (Full Price)", "1-10%", "11-20%", "21-30%", "30%+ (Deep Discount)"],
+                )
+                b_grp = df_disc.groupby("_bracket", observed=False).agg(
+                    total_rev=(rev_col, "sum"),
+                    total_prof=(profit_col, "sum"),
+                )
+                b_grp["margin_pct"] = (b_grp["total_prof"] / b_grp["total_rev"]) * 100.0
+                profit_charts.append(
+                    SectionChartSchema(
+                        id="discount_vs_margin",
+                        title="Profit Margin by Discount Tier",
+                        business_question="How do higher promotional discount levels impact profit margins?",
+                        chart_type="bar",
+                        metric="Profit Margin (%)",
+                        grouping="Discount Tier",
+                        explanation="Evaluates margin degradation across discount tiers to reveal whether aggressive markdown promotions erode profitability.",
+                        data=[{"x": str(idx), "y": _clean_num(val)} for idx, val in b_grp["margin_pct"].dropna().items()],
+                        x_label="Discount Tier",
+                        y_label="Profit Margin (%)",
+                    )
+                )
+            except Exception:
+                pass
+
     prod_charts: List[SectionChartSchema] = []
     prod_metrics: List[MetricStatusSchema] = []
-    prod_insights: List[Dict[str, Any]] = []
 
-    if product_col and rev_col:
-        prod_rev = df.groupby(product_col)[rev_col].sum().sort_values(ascending=False)
+    target_prod = product_col or category_col
+    if target_prod and rev_col:
+        prod_rev = df.groupby(target_prod)[rev_col].sum().sort_values(ascending=False)
         total_p_rev = prod_rev.sum()
 
         top_5 = prod_rev.head(5)
         prod_charts.append(
             SectionChartSchema(
                 id="top_products",
-                title="Top 5 Best-Selling Products",
-                business_question="Which specific products generate the most revenue?",
+                title=f"Top 5 Best-Performing {prettify(target_prod)}s",
+                business_question=f"Which specific {prettify(target_prod).lower()}s generate the most revenue?",
                 chart_type="bar",
                 metric="Revenue",
-                grouping="Product",
-                explanation="Ranks top-performing SKUs to prioritize marketing and ensure stock continuity.",
+                grouping=prettify(target_prod),
+                explanation=f"Ranks top-performing {prettify(target_prod).lower()}s to prioritize marketing and ensure continuous inventory availability.",
                 data=[{"x": str(idx), "y": _clean_num(val)} for idx, val in top_5.items()],
-                x_label="Product",
+                x_label=prettify(target_prod),
                 y_label="Revenue ($)",
             )
         )
 
         bottom_5 = prod_rev[prod_rev > 0].tail(5)
-        prod_charts.append(
-            SectionChartSchema(
-                id="underperforming_products",
-                title="Underperforming Products (Bottom 5)",
-                business_question="Which active catalog products have the lowest revenue contribution?",
-                chart_type="bar",
-                metric="Revenue",
-                grouping="Product",
-                explanation="Surfaces bottom-revenue products that may require repricing or catalog rationalization.",
-                data=[{"x": str(idx), "y": _clean_num(val)} for idx, val in bottom_5.items()],
-                x_label="Product",
-                y_label="Revenue ($)",
+        if len(bottom_5) > 0:
+            prod_charts.append(
+                SectionChartSchema(
+                    id="underperforming_products",
+                    title=f"Underperforming {prettify(target_prod)}s (Bottom 5)",
+                    business_question=f"Which active catalog {prettify(target_prod).lower()}s have the lowest revenue contribution?",
+                    chart_type="bar",
+                    metric="Revenue",
+                    grouping=prettify(target_prod),
+                    explanation=f"Surfaces bottom-revenue {prettify(target_prod).lower()}s that may require repricing, marketing revitalization, or catalog rationalization.",
+                    data=[{"x": str(idx), "y": _clean_num(val)} for idx, val in bottom_5.items()],
+                    x_label=prettify(target_prod),
+                    y_label="Revenue ($)",
+                )
             )
-        )
 
         cum_pct = (prod_rev.cumsum() / total_p_rev) * 100.0
         n_products = len(prod_rev)
@@ -646,20 +852,38 @@ def _build_sales_dashboard(
         prod_metrics.append(
             MetricStatusSchema(
                 id="pareto_share",
-                name="Top 20% Product Revenue Share",
+                name=f"Top 20% {prettify(target_prod)} Revenue Share",
                 value=top_20_rev_share,
                 formatted_value=f"{top_20_rev_share:.1f}%" if top_20_rev_share else "N/A",
                 status="Calculated",
-                explanation=f"The top {top_20_count} products ({top_20_rev_share:.1f}%) drive the majority of sales.",
+                explanation=f"The top {top_20_count} {prettify(target_prod).lower()}s ({top_20_rev_share:.1f}%) drive the vast majority of commercial sales.",
                 category="product",
-                business_meaning="Measures revenue concentration risk across product catalog.",
+                business_meaning="Measures revenue concentration risk across the catalog.",
             )
         )
+
+    # Key Positive Findings and Business Concerns
+    highlights: List[str] = []
+    if total_rev:
+        highlights.append(f"Generated {_format_currency(total_rev)} in gross revenue across {total_orders:,} commercial transactions (AOV: {_format_currency(aov)}).")
+    if has_profit and profit_margin is not None:
+        if profit_margin >= 15.0:
+            highlights.append(f"Healthy operating profitability of {_format_currency(total_profit)} with a {profit_margin:.1f}% net margin.")
+        elif profit_margin > 0:
+            highlights.append(f"Positive net profit of {_format_currency(total_profit)}, operating with a compressed margin of {profit_margin:.1f}%.")
+        else:
+            highlights.append(f"Net operating loss of {_format_currency(total_profit)} ({profit_margin:.1f}% margin). Urgent cost/pricing intervention needed.")
+    if total_loss and total_loss > 0:
+        highlights.append(f"Identified {_format_currency(total_loss)} in direct financial losses across unprofitable catalog orders/segments.")
 
     has_inventory = stock_col is not None
     inv_unavailable_reason = None if has_inventory else (
         "Inventory and stock analysis is unavailable because no inventory level, reorder point, "
         "or warehouse stock columns were detected in this dataset."
+    )
+
+    cat_unavailable_reason = None if len(sales_charts) > 0 else (
+        "Category-level performance analysis is unavailable because no suitable business dimension was detected."
     )
 
     return DecisionDashboardResponse(
@@ -668,34 +892,34 @@ def _build_sales_dashboard(
         executive_summary=DashboardSectionSchema(
             section_id="executive_summary",
             title="Executive Summary",
-            description="Commercial performance indicators, revenue health, and order volume.",
+            description="Commercial performance indicators, revenue health, profit margin, and transaction volume.",
             is_available=True,
             metrics=exec_metrics,
-            highlights=[
-                f"Generated {_format_currency(total_rev)} in revenue across {total_orders:,} orders."
-                if total_rev else "Sales activity analyzed."
-            ],
+            highlights=highlights,
         ),
         sales_performance=DashboardSectionSchema(
             section_id="sales_performance",
             title="Sales Performance",
-            description="Revenue trends, category breakdowns, and order volume.",
+            description="Revenue trajectory, category breakdowns, and order volume.",
             is_available=len(sales_charts) > 0,
+            unavailable_reason=cat_unavailable_reason,
             charts=sales_charts,
         ),
         profitability=DashboardSectionSchema(
             section_id="profitability",
-            title="Profitability & Margins",
-            description="Net profit, profit margin, and cost vs revenue relationship.",
+            title="Profit & Loss Analysis",
+            description="Net profit, profit margin, loss-making segments, and discount vs margin dynamics.",
             is_available=has_profit,
             unavailable_reason=profit_explanation if not has_profit else None,
             metrics=[m for m in exec_metrics if m.category == "profitability"],
+            charts=profit_charts,
         ),
         product_analysis=DashboardSectionSchema(
             section_id="product_analysis",
             title="Product & Catalog Analysis",
             description="Top-selling products, underperforming SKUs, and Pareto revenue contribution.",
             is_available=len(prod_charts) > 0,
+            unavailable_reason="Product-level performance analysis is unavailable because no suitable product or SKU column was detected." if len(prod_charts) == 0 else None,
             metrics=prod_metrics,
             charts=prod_charts,
         ),
@@ -709,18 +933,19 @@ def _build_sales_dashboard(
         insights_recommendations=DashboardSectionSchema(
             section_id="insights_recommendations",
             title="Insights & Management Actions",
-            description="Factual findings, root causes, and recommended executive investigations.",
+            description="Factual business findings, root causes, and recommended executive investigations.",
             is_available=True,
             insights=[
                 {
-                    "what_happened": f"Gross sales volume reached {_format_currency(total_rev)}." if total_rev else "Sales data analyzed.",
-                    "why_it_happened": "Commercial returns driven by product catalog demand.",
-                    "what_to_investigate": "Assess marketing alignment with top-grossing products and evaluate supplier reliability.",
-                    "limitations": "Does not reflect external promotional calendars or competitor pricing.",
+                    "what_happened": f"Gross sales volume reached {_format_currency(total_rev)} with an average transaction value of {_format_currency(aov)}." if total_rev else "Sales transaction records analyzed.",
+                    "why_it_happened": "Commercial returns driven by catalog product mix, discount structures, and regional demand.",
+                    "what_to_investigate": "Assess marketing alignment with top-grossing products, review discount caps on low-margin SKUs, and evaluate supplier margins.",
+                    "limitations": "Analysis based on historical in-sample transactions without external advertising spend or competitor price indexing.",
                 }
             ],
         ),
     )
+
 
 
 # ==============================================================================

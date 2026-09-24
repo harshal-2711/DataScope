@@ -333,8 +333,8 @@ export function detectColumnUnit(
   }
 
   if (CURRENCY_KEYWORDS.some((k) => tail.includes(k) || clean.includes(k))) {
-    const sym = datasetCurrency || (domainId === "sports_cricket" || domainId === "government_procurement" ? "₹" : "₹")
-    return { unit: sym, semanticType: "currency", currencySymbol: sym }
+    const sym = datasetCurrency || (domainId === "sports_cricket" || domainId === "government_procurement" ? "₹" : null)
+    return { unit: sym || "", semanticType: "currency", currencySymbol: sym }
   }
 
   // 2. Percentage & Rate
@@ -425,7 +425,7 @@ export function formatMetricValue(
 
   // 1. Currency
   if (semType === "currency" || (unit && CURRENCY_SYMS.has(unit)) || sym) {
-    const currencySym = sym || unit || "₹"
+    const currencySym = sym || (unit && CURRENCY_SYMS.has(unit) ? unit : "")
     if (isCompact) {
       const absN = Math.abs(n)
       if (absN >= 1_000_000_000) return `${currencySym}${(n / 1_000_000_000).toFixed(2)}B`
@@ -478,8 +478,9 @@ export function formatMetricValue(
     return `${n.toFixed(precision)}${uLabel}`
   }
 
-  // 7. General / Neutral numeric
-  const uLabel = unit && unit !== "units" && unit !== "number" ? ` ${unit}` : ""
+  // 7. General / Neutral numeric (strip unknown / 'Currency' placeholders)
+  const isExcludedUnit = !unit || unit === "units" || unit === "number" || unit.toLowerCase() === "currency" || unit.toLowerCase() === "unknown"
+  const uLabel = !isExcludedUnit ? ` ${unit}` : ""
   if (isCompact && Math.abs(n) >= 1000) {
     return `${formatNumberCompact(n)}${uLabel}`
   }

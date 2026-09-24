@@ -1,24 +1,52 @@
-# Node
-frontend/node_modules/
-frontend/dist/
-frontend/.vite/
-npm-debug.log*
+# Local databases
+*.db
+*.sqlite
+*.sqlite3
+datascope.db
+backend/datascope.db
 
 # Environment
 .env
-.env.local
-**/.env
-!**/.env.example
+.env.*
+!.env.example
+backend/.env
+backend/.env.*
+!backend/.env.example
 
 # Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
 backend/venv/
-backend/__pycache__/
-backend/**/__pycache__/
-*.pyc
 backend/.pytest_cache/
+.pytest_cache/
 
-# Editor / OS
+# Node
+node_modules/
+frontend/node_modules/
+dist/
+frontend/dist/
+.vite/
+frontend/.vite/
+npm-debug.log*
+
+# Logs
+*.log
+
+# IDE / OS
 .vscode/
 .idea/
 .DS_Store
 Thumbs.db
+
+# Test / coverage
+coverage/
+htmlcov/
+
+# Temporary files
+*.tmp
+*.temp
+
+# Generated archives
+*.zip

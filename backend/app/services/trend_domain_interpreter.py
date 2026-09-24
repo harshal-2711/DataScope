@@ -155,15 +155,27 @@ def interpret_domain_trend(
         all_columns=all_dataset_columns,
     )
 
+    # Determine direction for the latest period delta vs overall trajectory
+    if direction == "insufficient_data" or previous_val is None:
+        period_direction = "insufficient_data"
+    elif abs_change is not None and abs_change > 0:
+        period_direction = "increasing"
+    elif abs_change is not None and abs_change < 0:
+        period_direction = "decreasing"
+    elif direction == "fluctuating":
+        period_direction = "fluctuating"
+    else:
+        period_direction = "stable"
+
     # Format actual change text
     pct_display = f"{abs(pct_change):.1f}%" if pct_change is not None else "N/A"
     abs_display = f"{abs(abs_change):,.2f}" if abs_change is not None else "0.00"
     
-    if direction == "insufficient_data" or previous_val is None:
+    if period_direction == "insufficient_data":
         actual_change_text = "Baseline observation (single period recorded; longitudinal change N/A)"
-    elif direction == "stable" or abs_change == 0 or pct_change == 0:
+    elif period_direction == "stable" or abs_change == 0 or pct_change == 0:
         actual_change_text = f"Remained stable at {current_val:,.2f} (0.0% period change)"
-    elif abs_change and abs_change > 0:
+    elif period_direction == "increasing":
         actual_change_text = f"Increased by {pct_display} (+{abs_display})"
     else:
         actual_change_text = f"Decreased by {pct_display} (-{abs_display})"
@@ -186,19 +198,19 @@ def interpret_domain_trend(
             "Financial Distinction: This metric tracks top-line sales turnover (Gross Revenue), "
             "not net profit. Revenue changes reflect commercial sales intake rather than bottom-line earnings."
         )
-        if direction == "increasing":
+        if period_direction == "increasing":
             sentiment = "positive"
             contextual_interpretation = (
                 f"Top-Line Sales Growth: {granularity_label} revenue increased by {pct_display}, "
                 f"indicating expanding commercial volume and positive top-line sales traction."
             )
-        elif direction == "decreasing":
+        elif period_direction == "decreasing":
             sentiment = "warning"
             contextual_interpretation = (
-                f"Revenue Decline Warning: {granularity_label} revenue decreased by {pct_display}. "
+                f"Revenue Decline: {granularity_label} revenue decreased by {pct_display}. "
                 f"This indicates a top-line sales contraction (lower sales volume/turnover) rather than a net margin deficit."
             )
-        elif direction == "fluctuating":
+        elif period_direction == "fluctuating":
             sentiment = "informational"
             contextual_interpretation = (
                 f"Revenue Fluctuation: {granularity_label} revenue demonstrates periodic variability "
@@ -214,19 +226,19 @@ def interpret_domain_trend(
             "Financial Distinction: This metric tracks bottom-line profit (Net Margin / Income) after costs, "
             "distinct from gross top-line revenue."
         )
-        if direction == "increasing":
+        if period_direction == "increasing":
             sentiment = "improvement"
             contextual_interpretation = (
                 f"Profit Improvement: {granularity_label} profit increased by {pct_display}, "
                 f"indicating expanding net profitability and improved margin performance."
             )
-        elif direction == "decreasing":
+        elif period_direction == "decreasing":
             sentiment = "concern"
             contextual_interpretation = (
                 f"Profit Reduction: {granularity_label} profit decreased by {pct_display}, "
                 f"indicating net margin compression or reduced earnings."
             )
-        elif direction == "fluctuating":
+        elif period_direction == "fluctuating":
             sentiment = "informational"
             contextual_interpretation = f"{granularity_label} profit shows period-over-period margin variability."
         else:
@@ -236,13 +248,13 @@ def interpret_domain_trend(
 
     elif role == "loss":
         distinction_note = "Financial Distinction: Inverted financial metric where higher values represent increased deficit."
-        if direction == "increasing":
+        if period_direction == "increasing":
             sentiment = "concern"
             contextual_interpretation = (
                 f"Loss Worsening: Recorded losses increased by {pct_display}, "
                 f"indicating an escalating financial deficit that requires cost or margin review."
             )
-        elif direction == "decreasing":
+        elif period_direction == "decreasing":
             sentiment = "improvement"
             contextual_interpretation = (
                 f"Loss Reduction: Recorded losses decreased by {pct_display}, "
@@ -255,13 +267,13 @@ def interpret_domain_trend(
 
     elif role == "expense_cost":
         distinction_note = "Cost Management: Higher expenses represent potential margin pressure unless offset by revenue growth."
-        if direction == "increasing":
+        if period_direction == "increasing":
             sentiment = "concern"
             contextual_interpretation = (
                 f"Cost Increase Concern: Operational costs/expenses increased by {pct_display}, "
                 f"representing potential cost inflation or budget pressure."
             )
-        elif direction == "decreasing":
+        elif period_direction == "decreasing":
             sentiment = "improvement"
             contextual_interpretation = (
                 f"Cost Reduction: Operational costs/expenses decreased by {pct_display}, "
@@ -276,13 +288,13 @@ def interpret_domain_trend(
     # 2. SPORTS
     # =========================================================================
     elif role == "sports_wins":
-        if direction == "increasing":
+        if period_direction == "increasing":
             sentiment = "improvement"
             contextual_interpretation = (
                 f"Improved Performance: Team match victories increased by {pct_display}, "
                 f"reflecting strong competitive momentum and higher match conversion."
             )
-        elif direction == "decreasing":
+        elif period_direction == "decreasing":
             sentiment = "concern"
             contextual_interpretation = (
                 f"Performance Dip: Match wins decreased by {pct_display}, "
@@ -294,13 +306,13 @@ def interpret_domain_trend(
         qualification = "Sports Analytics: Tracks team match victory frequency."
 
     elif role == "sports_losses":
-        if direction == "increasing":
+        if period_direction == "increasing":
             sentiment = "concern"
             contextual_interpretation = (
                 f"Performance Concern: Match defeats increased by {pct_display}, "
                 f"signaling a losing trend that warrants tactical and lineup review."
             )
-        elif direction == "decreasing":
+        elif period_direction == "decreasing":
             sentiment = "improvement"
             contextual_interpretation = (
                 f"Form Improvement: Match defeats decreased by {pct_display}, "
@@ -312,13 +324,13 @@ def interpret_domain_trend(
         qualification = "Sports Analytics: Inverted metric; defeat reduction indicates improved form."
 
     elif role in ("sports_scoring", "sports_metrics"):
-        if direction == "increasing":
+        if period_direction == "increasing":
             sentiment = "improvement"
             contextual_interpretation = (
                 f"Scoring Improvement: {metric_name} increased by {pct_display}, "
                 f"indicating improved offensive scoring efficiency and match output."
             )
-        elif direction == "decreasing":
+        elif period_direction == "decreasing":
             sentiment = "concern"
             contextual_interpretation = (
                 f"Scoring Decline: {metric_name} decreased by {pct_display}, "

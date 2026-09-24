@@ -309,7 +309,8 @@ def infer_column_type(series: pd.Series, row_count: int) -> ColumnInference:
             warnings=warnings,
         )
 
-    str_samples = non_null_series.astype(str).str.strip()
+    sample_str = non_null_series.iloc[:1000] if len(non_null_series) > 1000 else non_null_series
+    str_samples = sample_str.astype(str).str.strip()
     lower_samples = str_samples.str.lower()
     distinct_lower = set(lower_samples.unique())
 

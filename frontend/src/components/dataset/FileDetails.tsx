@@ -22,14 +22,14 @@ export function FileDetails({
   onAnalyze,
 }: FileDetailsProps) {
   return (
-    <Card>
-      <CardContent className="flex items-center justify-between gap-4 py-6">
+    <Card className="border-neutral-800 bg-[#12161f]/80">
+      <CardContent className="flex items-center justify-between gap-4 py-5">
         <div className="flex min-w-0 items-center gap-3">
           <div className="shrink-0 rounded-full bg-muted p-2">
             <FileSpreadsheet className="h-5 w-5 text-muted-foreground" />
           </div>
           <div className="min-w-0">
-            <p className="truncate text-sm font-medium">{file.name}</p>
+            <p className="truncate text-sm font-medium text-white">{file.name}</p>
             <p className="text-xs text-muted-foreground">
               {formatFileSize(file.size)}
             </p>
@@ -42,13 +42,14 @@ export function FileDetails({
             onClick={onRemove}
             disabled={isProcessing}
             aria-label="Remove file"
+            className="text-neutral-400 hover:text-white"
           >
             <X className="h-4 w-4" />
           </Button>
           <Button onClick={onAnalyze} disabled={isProcessing}>
             {isProcessing ? (
               <>
-                <Loader2 className="h-4 w-4 animate-spin" />
+                <Loader2 className="h-4 w-4 animate-spin mr-1.5" />
                 Analyzing…
               </>
             ) : (

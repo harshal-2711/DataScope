@@ -25,7 +25,7 @@ export function DatasetGrainBadge({ grain }: DatasetGrainBadgeProps) {
         <div className="flex flex-wrap items-center justify-between gap-3">
           {/* Left: Grain Identification */}
           <div className="flex items-center gap-2.5">
-            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-indigo-500/10 text-indigo-600 dark:text-indigo-400">
+            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-secondary text-foreground">
               <Layers className="h-4 w-4" />
             </div>
             <div>
@@ -33,15 +33,15 @@ export function DatasetGrainBadge({ grain }: DatasetGrainBadgeProps) {
                 <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
                   Dataset Grain:
                 </span>
-                <Badge variant="secondary" className="font-semibold text-xs px-2 py-0.5 bg-indigo-500/10 text-indigo-700 dark:text-indigo-300 border-indigo-200">
+                <Badge variant="secondary" className="font-semibold text-xs px-2 py-0.5 bg-secondary text-foreground border border-border">
                   {grain.grain_label}
                 </Badge>
                 {isOneToOne ? (
-                  <Badge variant="outline" className="text-[11px] font-normal text-emerald-600 border-emerald-200 bg-emerald-500/5">
+                  <Badge variant="outline" className="text-[11px] font-normal text-emerald-400 border-emerald-500/30 bg-emerald-500/10">
                     1 row = 1 unique entity
                   </Badge>
                 ) : (
-                  <Badge variant="outline" className="text-[11px] font-normal text-amber-600 border-amber-200 bg-amber-500/5">
+                  <Badge variant="outline" className="text-[11px] font-normal text-amber-400 border-amber-500/30 bg-amber-500/10">
                     Repeated observations (multi-row entities)
                   </Badge>
                 )}
@@ -126,7 +126,7 @@ export function DatasetGrainBadge({ grain }: DatasetGrainBadgeProps) {
                   <span className="text-[10px] uppercase tracking-wider text-muted-foreground w-16">Measures:</span>
                   {grain.measures && grain.measures.length > 0 ? (
                     grain.measures.slice(0, 6).map((m) => (
-                      <span key={m} className="px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-700 dark:text-amber-300 text-[10px] font-mono">
+                      <span key={m} className="px-1.5 py-0.5 rounded bg-secondary text-foreground text-[10px] font-mono border border-border">
                         {m}
                       </span>
                     ))
@@ -138,7 +138,7 @@ export function DatasetGrainBadge({ grain }: DatasetGrainBadgeProps) {
                   <span className="text-[10px] uppercase tracking-wider text-muted-foreground w-16">Dimensions:</span>
                   {grain.dimensions && grain.dimensions.length > 0 ? (
                     grain.dimensions.slice(0, 6).map((d) => (
-                      <span key={d} className="px-1.5 py-0.5 rounded bg-indigo-500/10 text-indigo-700 dark:text-indigo-300 text-[10px] font-mono">
+                      <span key={d} className="px-1.5 py-0.5 rounded bg-secondary text-foreground text-[10px] font-mono border border-border">
                         {d}
                       </span>
                     ))

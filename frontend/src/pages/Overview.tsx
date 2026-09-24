@@ -5,6 +5,7 @@ import { ConnectionStatus } from "@/components/shared/ConnectionStatus"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { KpiRow } from "@/components/dashboard/KpiRow"
+import { OnboardingChecklist } from "@/components/dashboard/OnboardingChecklist"
 import { useActiveDataset } from "@/context/DatasetContext"
 import { useDatasetRecommendations } from "@/hooks/useDatasetRecommendations"
 
@@ -14,10 +15,13 @@ export default function Overview() {
 
   return (
     <div className="space-y-6">
+      <OnboardingChecklist hasDataset={!!activeDataset} />
+
       <PageHeader
         title="Workspace Overview"
         description="A summary view of your active workspace, backend connection status, and analytical modules."
       />
+
 
       <div className="grid gap-4 md:grid-cols-2">
         <ConnectionStatus />
@@ -91,7 +95,7 @@ export default function Overview() {
               to="/explore"
               className="flex items-center gap-3 rounded-lg border border-border bg-card p-4 transition-colors hover:border-primary/50 hover:bg-muted/50"
             >
-              <div className="rounded-md bg-blue-500/10 p-2 text-blue-500">
+              <div className="rounded-md bg-secondary p-2 text-foreground">
                 <Search className="h-4 w-4" />
               </div>
               <div>
@@ -104,7 +108,7 @@ export default function Overview() {
               to="/trends"
               className="flex items-center gap-3 rounded-lg border border-border bg-card p-4 transition-colors hover:border-primary/50 hover:bg-muted/50"
             >
-              <div className="rounded-md bg-emerald-500/10 p-2 text-emerald-500">
+              <div className="rounded-md bg-secondary p-2 text-foreground">
                 <TrendingUp className="h-4 w-4" />
               </div>
               <div>
@@ -117,7 +121,7 @@ export default function Overview() {
               to="/forecast"
               className="flex items-center gap-3 rounded-lg border border-border bg-card p-4 transition-colors hover:border-primary/50 hover:bg-muted/50"
             >
-              <div className="rounded-md bg-purple-500/10 p-2 text-purple-500">
+              <div className="rounded-md bg-secondary p-2 text-foreground">
                 <LineChart className="h-4 w-4" />
               </div>
               <div>
@@ -130,7 +134,7 @@ export default function Overview() {
               to="/risks"
               className="flex items-center gap-3 rounded-lg border border-border bg-card p-4 transition-colors hover:border-primary/50 hover:bg-muted/50"
             >
-              <div className="rounded-md bg-rose-500/10 p-2 text-rose-500">
+              <div className="rounded-md bg-secondary p-2 text-foreground">
                 <ShieldAlert className="h-4 w-4" />
               </div>
               <div>

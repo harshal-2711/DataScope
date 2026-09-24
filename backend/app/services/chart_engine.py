@@ -48,7 +48,7 @@ def _clean_val(v: Any) -> Any:
 def _infer_unit(col_name: str) -> str:
     lowered = col_name.lower()
     if any(k in lowered for k in ("price", "cost", "revenue", "sales", "amount", "budget", "spend", "value", "fee", "salary", "charge")):
-        return "Currency ($)"
+        return "Amount"
     if any(k in lowered for k in ("pct", "percent", "rate", "share", "ratio", "margin")):
         return "Percentage (%)"
     if any(k in lowered for k in ("days", "duration", "time", "hours", "tenure", "lead_time")):

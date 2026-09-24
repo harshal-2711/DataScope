@@ -401,18 +401,18 @@ export function ForecastViewer({ datasetId }: ForecastViewerProps) {
               Historical Trajectory & Statistical Projections (+{horizon} {data.frequency_label?.toLowerCase()} periods)
             </h3>
             <p className="text-xs text-muted-foreground">
-              Solid blue line represents historical values. Dashed purple line represents statistical projections with shaded 80% & 95% prediction intervals.
+              Solid blue line represents historical values. Dashed amber line represents statistical projections with shaded 80% & 95% prediction intervals.
             </p>
           </div>
           <div className="flex items-center gap-2 text-xs">
             <span className="inline-flex items-center gap-1.5 text-muted-foreground">
-              <span className="h-2 w-2 rounded-full bg-[#2563eb]" /> Actual
+              <span className="h-2 w-2 rounded-full bg-[#38bdf8]" /> Actual
             </span>
             <span className="inline-flex items-center gap-1.5 text-muted-foreground">
-              <span className="h-2 w-2 rounded-full bg-[#9333ea]" /> Projected
+              <span className="h-2 w-2 rounded-full bg-[#f59e0b]" /> Projected
             </span>
             <span className="inline-flex items-center gap-1.5 text-muted-foreground">
-              <span className="h-2 w-2 rounded-full bg-[#3b82f6]/40" /> 80% / 95% Confidence
+              <span className="h-2 w-2 rounded-full bg-[#38bdf8]/40" /> 80% / 95% Confidence
             </span>
           </div>
         </div>
@@ -453,16 +453,16 @@ export function ForecastViewer({ datasetId }: ForecastViewerProps) {
                 dataKey="upper_95"
                 name="95% Upper Bound"
                 stroke="transparent"
-                fill="#3b82f6"
-                fillOpacity={0.08}
+                fill="#38bdf8"
+                fillOpacity={0.06}
               />
               <Area
                 type="monotone"
                 dataKey="lower_95"
                 name="95% Lower Bound"
                 stroke="transparent"
-                fill="#3b82f6"
-                fillOpacity={0.08}
+                fill="#38bdf8"
+                fillOpacity={0.06}
               />
 
               {/* 80% Confidence Interval Band */}
@@ -471,16 +471,16 @@ export function ForecastViewer({ datasetId }: ForecastViewerProps) {
                 dataKey="upper_80"
                 name="80% Upper Bound"
                 stroke="transparent"
-                fill="#9333ea"
-                fillOpacity={0.08}
+                fill="#f59e0b"
+                fillOpacity={0.06}
               />
               <Area
                 type="monotone"
                 dataKey="lower_80"
                 name="80% Lower Bound"
                 stroke="transparent"
-                fill="#9333ea"
-                fillOpacity={0.08}
+                fill="#f59e0b"
+                fillOpacity={0.06}
               />
 
               {/* Actual Historical Line */}
@@ -488,8 +488,8 @@ export function ForecastViewer({ datasetId }: ForecastViewerProps) {
                 type="monotone"
                 dataKey="actual"
                 name="Actual Historical"
-                stroke="#2563eb"
-                strokeWidth={2.5}
+                stroke="#38bdf8"
+                strokeWidth={2}
                 dot={{ r: 3 }}
                 activeDot={{ r: 5 }}
               />
@@ -499,8 +499,8 @@ export function ForecastViewer({ datasetId }: ForecastViewerProps) {
                 type="monotone"
                 dataKey="forecast"
                 name="Projected Forecast"
-                stroke="#9333ea"
-                strokeWidth={2.5}
+                stroke="#f59e0b"
+                strokeWidth={2}
                 strokeDasharray="4 4"
                 dot={{ r: 3 }}
                 activeDot={{ r: 5 }}

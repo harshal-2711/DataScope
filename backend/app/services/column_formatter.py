@@ -416,7 +416,7 @@ def detect_column_unit(
         return ("£", "currency", "£")
 
     if any(k in tokens for k in _CURRENCY_KEYWORDS) or any(k in col_tail for k in ("price", "cost", "revenue", "sales", "profit", "amount", "budget", "salary", "spend", "expense", "tender_value", "contract_value", "freight_value", "freight_cost", "total_spend")):
-        sym = dataset_currency or ("₹" if domain_id in ("sports_cricket", "government_procurement") else "₹")
+        sym = dataset_currency or "₹"
         return (sym, "currency", sym)
 
     # 2. Duration / Time first (so duration doesn't trigger ratio)
