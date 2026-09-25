@@ -25,13 +25,15 @@ backend/venv/
 backend/.pytest_cache/
 .pytest_cache/
 
-# Node
+# Node & TypeScript
 node_modules/
 frontend/node_modules/
 dist/
 frontend/dist/
+build/
 .vite/
 frontend/.vite/
+*.tsbuildinfo
 npm-debug.log*
 
 # Logs
@@ -50,6 +52,8 @@ htmlcov/
 # Temporary files
 *.tmp
 *.temp
+.temp/
+supabase/.temp/
 
 # Generated archives
 *.zip

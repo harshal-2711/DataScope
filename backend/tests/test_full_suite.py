@@ -1,11 +1,12 @@
+import os
 import urllib.request
 import urllib.error
 import json
 import time
 
-BASE_URL = "http://127.0.0.1:8000/api"
-SUPABASE_URL = "https://wvbozonxguapddgrbitz.supabase.co"
-ANON_KEY = "sb_publishable_C-De4bkO-fUjauTg_GGGLg_IMot1AnQ"
+BASE_URL = os.getenv("API_BASE_URL", "http://127.0.0.1:8000/api")
+SUPABASE_URL = os.getenv("SUPABASE_URL", "https://your-project-id.supabase.co")
+ANON_KEY = os.getenv("SUPABASE_ANON_KEY", "your-anon-key")
 
 def run_full_suite():
     print("=" * 70)

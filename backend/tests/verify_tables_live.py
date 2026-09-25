@@ -3,8 +3,8 @@ import urllib.error
 import json
 import os
 
-SUPABASE_URL = "https://wvbozonxguapddgrbitz.supabase.co"
-ANON_KEY = "sb_publishable_C-De4bkO-fUjauTg_GGGLg_IMot1AnQ"
+SUPABASE_URL = os.getenv("SUPABASE_URL", "https://your-project-id.supabase.co")
+ANON_KEY = os.getenv("SUPABASE_ANON_KEY", "your-anon-key")
 
 TABLES_TO_CHECK = [
     "profiles",

@@ -2,7 +2,7 @@
 
 Ensures all DataScope workspace resources (Profiles, Companies, Memberships,
 Data Sources, Datasets, Dataset Versions, Data Records, Audit Logs) are synchronized
-with the Supabase Cloud project (https://wvbozonxguapddgrbitz.supabase.co).
+with the Supabase Cloud project configured via SUPABASE_URL.
 """
 from __future__ import annotations
 

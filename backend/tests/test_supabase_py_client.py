@@ -4,8 +4,10 @@ except ImportError:
     create_client = None
     Client = None
 
-SUPABASE_URL = "https://wvbozonxguapddgrbitz.supabase.co"
-SUPABASE_KEY = "sb_publishable_C-De4bkO-fUjauTg_GGGLg_IMot1AnQ"
+import os
+
+SUPABASE_URL = os.getenv("SUPABASE_URL", "https://your-project-id.supabase.co")
+SUPABASE_KEY = os.getenv("SUPABASE_ANON_KEY", "your-anon-key")
 
 def test_client():
     client: Client = create_client(SUPABASE_URL, SUPABASE_KEY)

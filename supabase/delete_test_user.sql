@@ -1,6 +1,6 @@
 -- ==============================================================================
 -- DATASCOPE: STRICT ZERO-RISK TEST USER AUDIT & RESET SCRIPT
--- Target Email: om2711sharma@gmail.com
+-- Target Email: test-user@example.com
 -- Mode: Production-Safe Dev Reset with Strict Workspace Ownership Guards
 -- ==============================================================================
 
@@ -27,7 +27,7 @@
 WITH target AS (
     SELECT id, email, created_at, last_sign_in_at
     FROM auth.users
-    WHERE email = 'om2711sharma@gmail.com'
+    WHERE email = 'test-user@example.com'
 )
 SELECT 
     t.id AS target_auth_user_id,
@@ -90,7 +90,7 @@ LEFT JOIN public.profiles p ON p.id = t.id;
 -- ==============================================================================
 DO $$
 DECLARE
-    v_target_email TEXT := 'om2711sharma@gmail.com';
+    v_target_email TEXT := 'test-user@example.com';
     v_target_user_id UUID;
     v_company RECORD;
     v_is_creator BOOLEAN;

@@ -1,10 +1,11 @@
 """Comprehensive Real End-to-End Supabase Verification Script."""
+import os
 import sys
 import httpx
 from supabase import create_client, Client
 
-SUPABASE_URL = "https://wvbozonxguapddgrbitz.supabase.co"
-SUPABASE_KEY = "sb_publishable_C-De4bkO-fUjauTg_GGGLg_IMot1AnQ"
+SUPABASE_URL = os.getenv("SUPABASE_URL", "https://your-project-id.supabase.co")
+SUPABASE_KEY = os.getenv("SUPABASE_ANON_KEY", "your-anon-key")
 
 def run_e2e_verification():
     print("=" * 60)

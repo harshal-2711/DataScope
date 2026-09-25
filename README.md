@@ -28,13 +28,14 @@ Copy `.env.example` to `.env` in the root (for backend) and `frontend/.env` (for
 
 **Backend `.env`:**
 ```env
-DATABASE_URL=sqlite:///./datascope.db
+DATABASE_URL=postgresql://postgres.your-project-id:your-password@aws-0-region.pooler.supabase.com:6543/postgres
+# Local development fallback: DATABASE_URL=sqlite:///./datascope.db
 SUPABASE_URL=https://your-project-id.supabase.co
 SUPABASE_ANON_KEY=your-supabase-anon-key
 SUPABASE_SERVICE_ROLE_KEY=your-supabase-service-role-key
 SUPABASE_JWT_SECRET=your-supabase-jwt-secret
 SUPABASE_DB_URL=postgresql://postgres.your-project-id:your-password@aws-0-region.pooler.supabase.com:6543/postgres
-SECRET_KEY=your-jwt-secret-key
+SECRET_KEY=replace-with-a-long-random-secret
 ```
 
 **Frontend `frontend/.env`:**
