@@ -9,6 +9,7 @@ import {
 } from "react"
 import { uploadDataset, clearClientApiCache, fetchActiveCompanyDataset } from "@/lib/datasetApi"
 import type { DatasetSummary, UploadState } from "@/types/dataset"
+import { useAuth } from "@/context/AuthContext"
 
 const SESSION_STORAGE_KEY = "datascope_active_dataset_summary"
 
@@ -66,6 +67,7 @@ const DatasetContext = createContext<DatasetContextValue | null>(null)
  * via client-side sessionStorage, avoiding repeated parsing, loss of state, or redundant uploads.
  */
 export function DatasetProvider({ children }: { children: ReactNode }) {
+  const { user, activeCompany } = useAuth()
   const [activeDataset, setActiveDatasetState] = useState<DatasetSummary | null>(() => loadInitialDataset())
   const [uploadState, setUploadState] = useState<UploadState>(() => {
     const initial = loadInitialDataset()
@@ -84,7 +86,7 @@ export function DatasetProvider({ children }: { children: ReactNode }) {
           file_type: d.file_type || "csv",
           row_count: d.row_count,
           column_count: d.column_count,
-          columns: [],
+          columns: d.columns || [],
           domain_id: d.domain_id || undefined,
           domain_name: d.domain_name || undefined,
           currency_symbol: d.currency_symbol || "$",
@@ -97,15 +99,26 @@ export function DatasetProvider({ children }: { children: ReactNode }) {
           }
           return prev
         })
+      } else if (res && !res.active) {
+        setActiveDatasetState(null)
+        saveDatasetToSession(null)
+        setUploadState({ status: "idle" })
       }
     } catch {
       // Offline or unauthenticated; fallback to session cache
     }
   }, [])
 
+  // Auto-sync dataset with current authenticated user and active company workspace
   useEffect(() => {
-    refreshActiveDataset()
-  }, [refreshActiveDataset])
+    if (!user) {
+      setActiveDatasetState(null)
+      saveDatasetToSession(null)
+      setUploadState({ status: "idle" })
+    } else if (activeCompany?.company_id) {
+      refreshActiveDataset()
+    }
+  }, [user, activeCompany?.company_id, refreshActiveDataset])
 
   const setActiveDataset = useCallback((summary: DatasetSummary | null) => {
     setActiveDatasetState(summary)

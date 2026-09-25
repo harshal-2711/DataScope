@@ -81,8 +81,8 @@ def list_company_datasets(
                 company_id=str(d.company_id),
                 name=d.name,
                 file_type=d.file_type or "csv",
-                row_count=d.current_row_count or d.row_count or 0,
-                column_count=d.current_col_count or d.column_count or 0,
+                row_count=getattr(d, "current_row_count", 0) or 0,
+                column_count=getattr(d, "current_col_count", 0) or 0,
                 currency_symbol=d.currency_symbol,
                 domain_id=d.domain_id,
                 domain_name=d.domain_name,
@@ -113,16 +113,34 @@ def get_active_company_dataset(
         return {"active": False, "dataset": None}
 
     # Ensure cached in dataset_store
-    stored = dataset_store.get_dataset(dataset.id)
+    stored = dataset_store.get_dataset(str(dataset.id))
     if not stored:
-        df = _rebuild_dataset_dataframe(db, dataset.id)
-        if not df.empty or dataset.current_row_count == 0:
-            dataset_store.save_dataset(dataset.name, dataset.file_type or "csv", df, dataset_id=dataset.id)
+        df = _rebuild_dataset_dataframe(db, str(dataset.id))
+        row_cnt = getattr(dataset, "current_row_count", 0) or 0
+        if not df.empty or row_cnt == 0:
+            dataset_store.save_dataset(dataset.name, dataset.file_type or "csv", df, dataset_id=str(dataset.id))
+            stored = dataset_store.get_dataset(str(dataset.id))
 
     from app.models.data_source import DataSource
     ds = db.query(DataSource).filter(DataSource.dataset_id == dataset.id).first()
     source_type = ds.source_type if ds else "file_upload"
     data_source_id = ds.id if ds else None
+
+    # Retrieve columns from active DatasetVersion or DataFrame
+    cols = []
+    version = (
+        db.query(DatasetVersion)
+        .filter(DatasetVersion.dataset_id == dataset.id)
+        .order_by(DatasetVersion.version_number.desc())
+        .first()
+    )
+    if version and version.column_schema:
+        try:
+            cols = json.loads(version.column_schema)
+        except Exception:
+            pass
+    elif stored and stored.df is not None:
+        cols = [{"name": str(c), "data_type": "string", "semantic_type": "text"} for c in stored.df.columns]
 
     return {
         "active": True,
@@ -130,12 +148,13 @@ def get_active_company_dataset(
             "id": str(dataset.id),
             "name": dataset.name,
             "file_type": dataset.file_type,
-            "row_count": dataset.current_row_count or dataset.row_count or 0,
-            "column_count": dataset.current_col_count or dataset.column_count or 0,
+            "row_count": getattr(dataset, "current_row_count", 0) or 0,
+            "column_count": getattr(dataset, "current_col_count", 0) or 0,
             "currency_symbol": dataset.currency_symbol,
             "domain_id": dataset.domain_id,
             "domain_name": dataset.domain_name,
             "active_version_number": dataset.active_version_number or 1,
+            "columns": cols,
             "created_at": dataset.created_at.isoformat() if dataset.created_at else None,
             "updated_at": dataset.updated_at.isoformat() if dataset.updated_at else None,
             "data_source_id": str(data_source_id) if data_source_id else None,
@@ -164,17 +183,17 @@ def activate_company_dataset(
     db.commit()
 
     # Hydrate in memory
-    stored = dataset_store.get_dataset(dataset.id)
+    stored = dataset_store.get_dataset(str(dataset.id))
     if not stored:
-        df = _rebuild_dataset_dataframe(db, dataset.id)
-        dataset_store.save_dataset(dataset.name, dataset.file_type or "csv", df, dataset_id=dataset.id)
+        df = _rebuild_dataset_dataframe(db, str(dataset.id))
+        dataset_store.save_dataset(dataset.name, dataset.file_type or "csv", df, dataset_id=str(dataset.id))
 
     return {
         "status": "success",
-        "dataset_id": dataset.id,
+        "dataset_id": str(dataset.id),
         "name": dataset.name,
-        "row_count": dataset.current_row_count or dataset.row_count,
-        "column_count": dataset.current_col_count or dataset.column_count,
+        "row_count": getattr(dataset, "current_row_count", 0) or 0,
+        "column_count": getattr(dataset, "current_col_count", 0) or 0,
     }
 
 

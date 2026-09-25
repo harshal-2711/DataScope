@@ -233,8 +233,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       return
     }
     const token = getStoredToken()
-    const protocol = window.location.protocol === "https:" ? "wss:" : "ws:"
-    const wsUrl = `${protocol}//${window.location.host}/api/ws/${activeCompany.company_id}?token=${token || ""}`
+    let wsHost = window.location.host
+    let wsProtocol = window.location.protocol === "https:" ? "wss:" : "ws:"
+    const apiBase = import.meta.env.VITE_API_BASE_URL
+    if (apiBase) {
+      try {
+        const u = new URL(apiBase, window.location.origin)
+        wsHost = u.host
+        wsProtocol = u.protocol === "https:" ? "wss:" : "ws:"
+      } catch {}
+    }
+    const wsUrl = `${wsProtocol}//${wsHost}/api/ws/${activeCompany.company_id}?token=${token || ""}`
 
     let socket: WebSocket | null = null
     let reconnectTimeout: any = null
@@ -352,6 +361,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       await supabase.auth.signOut().catch(() => {})
     }
     clearStoredAuth()
+    if (typeof window !== "undefined") {
+      sessionStorage.removeItem("datascope_active_dataset_summary")
+    }
     setUser(null)
     setCompanies([])
     setActiveCompanyId(null)

@@ -1,5 +1,5 @@
-import { useState } from "react"
-import { Menu, LogOut, User, Wifi, WifiOff } from "lucide-react"
+import { useCallback, useEffect, useState } from "react"
+import { Menu, LogOut, User, Wifi, WifiOff, Loader2 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet"
 import { SidebarNav } from "@/components/layout/Sidebar"
@@ -7,10 +7,53 @@ import { ThemeToggle } from "@/components/theme/ThemeToggle"
 import { ActiveDatasetBadge } from "@/components/dataset/ActiveDatasetBadge"
 import { CompanySwitcher } from "@/components/workspace/CompanySwitcher"
 import { useAuth } from "@/context/AuthContext"
+import { checkBackendHealth } from "@/lib/api"
 
 export function TopBar() {
   const [open, setOpen] = useState(false)
   const { user, logout, isWsConnected } = useAuth()
+  const [backendStatus, setBackendStatus] = useState<"checking" | "online" | "offline">("checking")
+
+  const verifyBackendStatus = useCallback(async () => {
+    if (typeof navigator !== "undefined" && !navigator.onLine) {
+      setBackendStatus("offline")
+      return
+    }
+    try {
+      await checkBackendHealth()
+      setBackendStatus("online")
+    } catch {
+      setBackendStatus("offline")
+    }
+  }, [])
+
+  useEffect(() => {
+    verifyBackendStatus()
+
+    const handleOnline = () => {
+      setBackendStatus("checking")
+      verifyBackendStatus()
+    }
+    const handleOffline = () => setBackendStatus("offline")
+    const handleVisibility = () => {
+      if (document.visibilityState === "visible") {
+        verifyBackendStatus()
+      }
+    }
+
+    window.addEventListener("online", handleOnline)
+    window.addEventListener("offline", handleOffline)
+    document.addEventListener("visibilitychange", handleVisibility)
+
+    const interval = setInterval(verifyBackendStatus, 30000)
+
+    return () => {
+      window.removeEventListener("online", handleOnline)
+      window.removeEventListener("offline", handleOffline)
+      document.removeEventListener("visibilitychange", handleVisibility)
+      clearInterval(interval)
+    }
+  }, [verifyBackendStatus])
 
   return (
     <header className="flex h-16 items-center justify-between border-b bg-background px-4 md:px-6 z-20">
@@ -46,18 +89,45 @@ export function TopBar() {
       </div>
 
       <div className="flex items-center gap-3">
-        {/* Real-time sync indicator */}
+        {/* Backend & Real-time Connectivity indicator */}
         <div
           className="hidden sm:flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-[11px] font-medium transition-colors"
           style={{
-            borderColor: isWsConnected ? "rgba(16, 185, 129, 0.3)" : "rgba(100, 116, 139, 0.3)",
-            backgroundColor: isWsConnected ? "rgba(16, 185, 129, 0.08)" : "rgba(100, 116, 139, 0.08)",
-            color: isWsConnected ? "#10B981" : "#94A3B8",
+            borderColor:
+              backendStatus === "online"
+                ? "rgba(16, 185, 129, 0.3)"
+                : backendStatus === "checking"
+                ? "rgba(245, 158, 11, 0.3)"
+                : "rgba(239, 68, 68, 0.3)",
+            backgroundColor:
+              backendStatus === "online"
+                ? "rgba(16, 185, 129, 0.08)"
+                : backendStatus === "checking"
+                ? "rgba(245, 158, 11, 0.08)"
+                : "rgba(239, 68, 68, 0.08)",
+            color:
+              backendStatus === "online"
+                ? "#10B981"
+                : backendStatus === "checking"
+                ? "#F59E0B"
+                : "#EF4444",
           }}
-          title={isWsConnected ? "Real-time sync active" : "Attempting real-time connection..."}
+          title={
+            backendStatus === "online"
+              ? isWsConnected
+                ? "Connected to backend API (Real-time active)"
+                : "Connected to backend API"
+              : backendStatus === "checking"
+              ? "Checking backend connectivity..."
+              : "Backend unreachable"
+          }
         >
-          {isWsConnected ? <Wifi className="w-3 h-3" /> : <WifiOff className="w-3 h-3" />}
-          <span>{isWsConnected ? "Live" : "Offline"}</span>
+          {backendStatus === "checking" && <Loader2 className="w-3 h-3 animate-spin" />}
+          {backendStatus === "online" && <Wifi className="w-3 h-3" />}
+          {backendStatus === "offline" && <WifiOff className="w-3 h-3" />}
+          <span>
+            {backendStatus === "checking" ? "Checking" : backendStatus === "online" ? "Online" : "Offline"}
+          </span>
         </div>
 
         <ThemeToggle />

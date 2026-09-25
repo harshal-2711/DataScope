@@ -39,7 +39,7 @@ class DatasetStore:
         self._entries: dict[str, StoredDataset] = {}
 
     def put(self, filename: str, file_type: str, df: pd.DataFrame, dataset_id: Optional[str] = None) -> str:
-        d_id = dataset_id or uuid.uuid4().hex
+        d_id = str(dataset_id) if dataset_id else uuid.uuid4().hex
         entry = StoredDataset(
             dataset_id=d_id, filename=filename, file_type=file_type, df=df
         )
@@ -51,13 +51,15 @@ class DatasetStore:
         return d_id
 
     def get(self, dataset_id: str) -> StoredDataset | None:
+        key = str(dataset_id)
         with self._lock:
-            return self._entries.get(dataset_id)
+            return self._entries.get(key)
 
     def attach_benchmark(self, dataset_id: str, benchmark_filename: str, benchmark_df: pd.DataFrame) -> bool:
         """Attach a verified external market benchmark DataFrame to an existing dataset entry."""
+        key = str(dataset_id)
         with self._lock:
-            entry = self._entries.get(dataset_id)
+            entry = self._entries.get(key)
             if not entry:
                 return False
             entry.benchmark_df = benchmark_df
@@ -68,8 +70,9 @@ class DatasetStore:
 
     def remove_benchmark(self, dataset_id: str) -> bool:
         """Detach external benchmark DataFrame from dataset entry."""
+        key = str(dataset_id)
         with self._lock:
-            entry = self._entries.get(dataset_id)
+            entry = self._entries.get(key)
             if not entry:
                 return False
             entry.benchmark_df = None
@@ -89,12 +92,13 @@ dataset_store = _store
 
 def save_dataset(filename: str, file_type: str, df: pd.DataFrame, dataset_id: Optional[str] = None) -> str:
     """Store a parsed dataset into the cache and return its dataset_id."""
-    return _store.put(filename, file_type, df, dataset_id=dataset_id)
+    return _store.put(filename, file_type, df, dataset_id=str(dataset_id) if dataset_id else None)
 
 
 def get_dataset(dataset_id: str) -> StoredDataset | None:
     """Look up dataset from memory, or hydrate from persistent DB / Supabase Storage."""
-    entry = _store.get(dataset_id)
+    key = str(dataset_id)
+    entry = _store.get(key)
     if entry is not None:
         return entry
 
@@ -108,11 +112,11 @@ def get_dataset(dataset_id: str) -> StoredDataset | None:
 
         db = SessionLocal()
         try:
-            ds = db.query(Dataset).filter(Dataset.id == dataset_id).first()
+            ds = db.query(Dataset).filter(Dataset.id == key).first()
             if ds:
                 records = (
                     db.query(DataRecord)
-                    .filter(DataRecord.dataset_id == dataset_id, DataRecord.is_deleted == 0)
+                    .filter(DataRecord.dataset_id == key, DataRecord.is_deleted == 0)
                     .order_by(DataRecord.row_index.asc())
                     .all()
                 )
@@ -134,9 +138,10 @@ def get_dataset(dataset_id: str) -> StoredDataset | None:
                             df = pd.read_csv(io.BytesIO(csv_bytes))
                             break
 
-                if not df.empty or ds.row_count == 0:
-                    save_dataset(ds.name, ds.file_type or "csv", df, dataset_id=ds.id)
-                    return _store.get(dataset_id)
+                row_cnt = getattr(ds, "current_row_count", 0) or 0
+                if not df.empty or row_cnt == 0:
+                    save_dataset(ds.name, ds.file_type or "csv", df, dataset_id=str(ds.id))
+                    return _store.get(key)
         finally:
             db.close()
     except Exception:

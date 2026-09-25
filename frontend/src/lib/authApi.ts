@@ -50,6 +50,7 @@ export function clearStoredAuth() {
   localStorage.removeItem("datascope_access_token")
   localStorage.removeItem("datascope_refresh_token")
   localStorage.removeItem("datascope_active_company_id")
+  sessionStorage.removeItem("datascope_active_dataset_summary")
 }
 
 function getAuthHeaders(companyId?: string | null): HeadersInit {
