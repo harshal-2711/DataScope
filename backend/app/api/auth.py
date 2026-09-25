@@ -170,10 +170,48 @@ def login(payload: UserLoginRequest, db: Session = Depends(get_db)):
             detail="This account has been deactivated. Please contact support.",
         )
 
+    # Check and activate any pending invitations for this email
+    now = datetime.now(timezone.utc)
+    pending_invs = (
+        db.query(Invitation)
+        .filter(
+            Invitation.email == email_clean,
+            Invitation.status == "pending",
+            Invitation.expires_at > now,
+        )
+        .all()
+    )
+    for inv in pending_invs:
+        existing_m = (
+            db.query(CompanyMembership)
+            .filter(CompanyMembership.user_id == user.id, CompanyMembership.company_id == inv.company_id)
+            .first()
+        )
+        if existing_m:
+            existing_m.role = inv.role
+            existing_m.status = "active"
+            existing_m.updated_at = now
+        else:
+            new_m = CompanyMembership(
+                id=str(uuid.uuid4()),
+                user_id=user.id,
+                company_id=inv.company_id,
+                role=inv.role,
+                status="active",
+                created_at=now,
+                updated_at=now,
+            )
+            db.add(new_m)
+        inv.status = "accepted"
+        inv.updated_at = now
+    if pending_invs:
+        db.commit()
+
     # Find active company membership
     membership = (
         db.query(CompanyMembership)
         .filter(CompanyMembership.user_id == user.id, CompanyMembership.status == "active")
+        .order_by(CompanyMembership.updated_at.desc())
         .first()
     )
     active_company_id = str(membership.company_id) if membership else None
@@ -241,8 +279,9 @@ def google_auth(payload: GoogleAuthRequest, db: Session = Depends(get_db)):
     email_clean = google_email.lower().strip()
     user = db.query(User).filter(User.email == email_clean).first()
     if not user:
+        worker_id = str(uuid.uuid4())
         user = User(
-            id=str(uuid.uuid4()),
+            id=worker_id,
             email=email_clean,
             full_name=google_name or "Google User",
             avatar_url=google_avatar,
@@ -252,36 +291,87 @@ def google_auth(payload: GoogleAuthRequest, db: Session = Depends(get_db)):
             google_id=google_id,
         )
         db.add(user)
-        db.flush()
 
-        company_name = f"{user.full_name}'s Workspace"
-        new_company = Company(
-            id=str(uuid.uuid4()),
-            name=company_name,
-            slug=f"{_slugify(company_name)}-{uuid.uuid4().hex[:6]}",
-            owner_id=user.id,
-        )
-        db.add(new_company)
+        from app.db.session import is_postgres
+        if is_postgres:
+            from sqlalchemy import text
+            try:
+                db.execute(text("""
+                    INSERT INTO auth.users (
+                        id, instance_id, aud, role, email,
+                        email_confirmed_at, raw_app_meta_data, raw_user_meta_data, 
+                        created_at, updated_at
+                    ) VALUES (
+                        :uid, '00000000-0000-0000-0000-000000000000', 'authenticated', 'authenticated', 
+                        :email, now(), '{"provider":"google","providers":["google"]}', 
+                        json_build_object('full_name', :name, 'avatar_url', :avatar), now(), now()
+                    )
+                    ON CONFLICT (id) DO NOTHING;
+                """), {
+                    "uid": worker_id,
+                    "email": email_clean,
+                    "name": google_name or "Google User",
+                    "avatar": google_avatar,
+                })
+            except Exception:
+                pass
         db.flush()
-
-        membership = CompanyMembership(
-            id=str(uuid.uuid4()),
-            user_id=user.id,
-            company_id=new_company.id,
-            role="owner",
-            status="active",
-        )
-        db.add(membership)
-        db.commit()
-        db.refresh(user)
-        active_company_id = new_company.id
     else:
+        if google_id and not user.google_id:
+            user.google_id = google_id
+        if google_avatar and not user.avatar_url:
+            user.avatar_url = google_avatar
+        db.flush()
+
+    # Resolve company membership: Check pending invitation first, then existing memberships
+    now = datetime.now(timezone.utc)
+    pending_inv = (
+        db.query(Invitation)
+        .filter(
+            Invitation.email == email_clean,
+            Invitation.status == "pending",
+            Invitation.expires_at > now,
+        )
+        .order_by(Invitation.created_at.desc())
+        .first()
+    )
+
+    if pending_inv:
+        # Worker was invited! Activate membership with assigned role
+        membership = (
+            db.query(CompanyMembership)
+            .filter(CompanyMembership.user_id == user.id, CompanyMembership.company_id == pending_inv.company_id)
+            .first()
+        )
+        if membership:
+            membership.role = pending_inv.role
+            membership.status = "active"
+            membership.updated_at = now
+        else:
+            membership = CompanyMembership(
+                id=str(uuid.uuid4()),
+                user_id=user.id,
+                company_id=pending_inv.company_id,
+                role=pending_inv.role,
+                status="active",
+                created_at=now,
+                updated_at=now,
+            )
+            db.add(membership)
+
+        pending_inv.status = "accepted"
+        pending_inv.updated_at = now
+        db.commit()
+        active_company_id = str(pending_inv.company_id)
+    else:
+        # Check for existing active membership
         membership = (
             db.query(CompanyMembership)
             .filter(CompanyMembership.user_id == user.id, CompanyMembership.status == "active")
             .first()
         )
-        active_company_id = membership.company_id if membership else None
+        active_company_id = str(membership.company_id) if membership else None
+        db.commit()
 
     token_data = {"sub": user.id, "email": user.email, "company_id": active_company_id}
     access_token = create_access_token(token_data)

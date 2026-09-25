@@ -113,6 +113,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
               setActiveCompanyId(data.companies[0].company_id)
               localStorage.setItem("datascope_active_company_id", data.companies[0].company_id)
             }
+          } else {
+            setActiveCompanyId(null)
+            localStorage.removeItem("datascope_active_company_id")
           }
           setIsLoading(false)
           isRefreshingRef.current = false
@@ -149,16 +152,28 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           }
           setUser(fallbackUser)
 
-          const defaultComp: CompanyMembershipItem = {
-            membership_id: `mem-${supaUser.id.slice(0, 8)}`,
-            company_id: `workspace-${supaUser.id.slice(0, 8)}`,
-            company_name: supaUser.user_metadata?.company_name || `${fallbackUser.full_name}'s Workspace`,
-            company_slug: `workspace-${supaUser.id.slice(0, 8)}`,
-            role: "owner",
-            status: "active",
+          // Query Supabase for real company memberships
+          const { data: mems } = await supabase
+            .from("company_memberships")
+            .select("id, company_id, role, status, companies(id, name, slug)")
+            .eq("user_id", supaUser.id)
+            .eq("status", "active")
+
+          if (mems && mems.length > 0) {
+            const mappedComps: CompanyMembershipItem[] = mems.map((m: any) => ({
+              membership_id: m.id,
+              company_id: m.company_id,
+              company_name: m.companies?.name || "Company Workspace",
+              company_slug: m.companies?.slug || "workspace",
+              role: m.role || "viewer",
+              status: m.status,
+            }))
+            setCompanies(mappedComps)
+            setActiveCompanyId(mappedComps[0].company_id)
+          } else {
+            setCompanies([])
+            setActiveCompanyId(null)
           }
-          setCompanies([defaultComp])
-          setActiveCompanyId(defaultComp.company_id)
           setIsLoading(false)
           isRefreshingRef.current = false
           return

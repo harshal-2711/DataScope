@@ -24,9 +24,10 @@ import Reports from "@/pages/Reports"
 import SettingsPage from "@/pages/Settings"
 
 import { InitializationScreen } from "@/components/common/InitializationScreen"
+import { NoCompanyAccess } from "@/components/common/NoCompanyAccess"
 
 function ProtectedLayout() {
-  const { isAuthenticated, isLoading, retryInit } = useAuth()
+  const { isAuthenticated, isLoading, retryInit, companies, activeCompany } = useAuth()
 
   if (isLoading) {
     return <InitializationScreen onRetry={retryInit} />
@@ -34,6 +35,10 @@ function ProtectedLayout() {
 
   if (!isAuthenticated) {
     return <Navigate to="/login" replace />
+  }
+
+  if (companies.length === 0 || !activeCompany) {
+    return <NoCompanyAccess />
   }
 
   return <AppShell />

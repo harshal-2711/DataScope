@@ -76,24 +76,32 @@ def get_current_user(
         db.add(user)
         db.flush()
 
-        # Provision default company workspace
-        slug = f"workspace-{user_id[:8]}"
-        company = Company(
-            name=f"{full_name}'s Workspace",
-            slug=slug,
-            owner_id=user.id,
-            domain_type="General Business",
+        # Check for any pending invitation for this user
+        import uuid
+        from datetime import datetime, timezone
+        from app.models.invitation import Invitation
+        pending_inv = (
+            db.query(Invitation)
+            .filter(
+                Invitation.email == user_email.lower().strip(),
+                Invitation.status == "pending",
+                Invitation.expires_at > datetime.now(timezone.utc),
+            )
+            .order_by(Invitation.created_at.desc())
+            .first()
         )
-        db.add(company)
-        db.flush()
+        if pending_inv:
+            membership = CompanyMembership(
+                id=str(uuid.uuid4()),
+                company_id=pending_inv.company_id,
+                user_id=user.id,
+                role=pending_inv.role,
+                status="active",
+            )
+            db.add(membership)
+            pending_inv.status = "accepted"
+            pending_inv.updated_at = datetime.now(timezone.utc)
 
-        membership = CompanyMembership(
-            company_id=company.id,
-            user_id=user.id,
-            role="owner",
-            status="active",
-        )
-        db.add(membership)
         db.commit()
         db.refresh(user)
 
@@ -164,27 +172,10 @@ def get_current_company(
         )
 
     if not membership:
-        # Auto-provision workspace for user if none exists
-        full_name = current_user.full_name or current_user.email.split("@")[0]
-        slug = f"workspace-{current_user.id[:8]}"
-        company = Company(
-            name=f"{full_name}'s Workspace",
-            slug=slug,
-            owner_id=current_user.id,
-            domain_type="General Business",
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="No company access. You need an invitation from a company administrator to access workspace resources.",
         )
-        db.add(company)
-        db.flush()
-
-        membership = CompanyMembership(
-            company_id=company.id,
-            user_id=current_user.id,
-            role="owner",
-            status="active",
-        )
-        db.add(membership)
-        db.commit()
-        return TenantContext(company=company, membership=membership, user=current_user)
 
     company = db.query(Company).filter(Company.id == membership.company_id).first()
     if not company:
