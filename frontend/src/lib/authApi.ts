@@ -220,16 +220,58 @@ export async function fetchCompanyMembers(companyId: string): Promise<MemberResp
 }
 
 export async function inviteCompanyMember(companyId: string, email: string, role: string): Promise<MemberResponseItem> {
-  const res = await fetch(`${API_BASE}/companies/${companyId}/invitations`, {
+  const url = `${API_BASE}/companies/${companyId}/invitations`
+  try {
+    const res = await fetch(url, {
+      method: "POST",
+      headers: getAuthHeaders(companyId),
+      body: JSON.stringify({ email, role }),
+    })
+    if (!res.ok) {
+      let detail = "Failed to invite member."
+      try {
+        const err = await res.json()
+        detail = err.detail || err.message || detail
+      } catch {}
+      throw new Error(detail)
+    }
+    return res.json()
+  } catch (err: any) {
+    if (err.message && !err.message.includes("Failed to fetch")) {
+      throw err
+    }
+    throw new Error("Unable to reach backend service to send invitation. Please verify network connectivity.")
+  }
+}
+
+export async function validateInvitation(token: string): Promise<{
+  valid: boolean
+  email?: string
+  role?: string
+  company_name?: string
+  company_id?: string
+  error?: string
+}> {
+  const res = await fetch(`${API_BASE}/auth/invitations/${encodeURIComponent(token)}`)
+  if (!res.ok) {
+    return { valid: false, error: "Unable to validate invitation. Please try again." }
+  }
+  return res.json()
+}
+
+export async function acceptInvitation(token: string, fullName: string, password: string): Promise<AuthTokenResponse> {
+  const res = await fetch(`${API_BASE}/auth/invitations/accept`, {
     method: "POST",
-    headers: getAuthHeaders(companyId),
-    body: JSON.stringify({ email, role }),
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ token, full_name: fullName, password }),
   })
   if (!res.ok) {
     const err = await res.json().catch(() => ({}))
-    throw new Error(err.detail || "Failed to invite member.")
+    throw new Error(err.detail || "Failed to activate invitation. Please verify your details.")
   }
-  return res.json()
+  const data: AuthTokenResponse = await res.json()
+  setStoredAuth(data.access_token, data.refresh_token, data.active_company_id)
+  return data
 }
 
 export async function removeCompanyMember(companyId: string, membershipId: string): Promise<void> {

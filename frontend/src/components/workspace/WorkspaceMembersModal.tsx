@@ -19,6 +19,8 @@ export function WorkspaceMembersModal({ companyId, companyName, userRole, onClos
   const [error, setError] = useState<string | null>(null)
   const [success, setSuccess] = useState<string | null>(null)
   const [isSubmitting, setIsSubmitting] = useState(false)
+  const [createdInviteUrl, setCreatedInviteUrl] = useState<string | null>(null)
+  const [copied, setCopied] = useState(false)
 
   const canManage = userRole === "owner" || userRole === "admin"
 
@@ -45,19 +47,26 @@ export function WorkspaceMembersModal({ companyId, companyName, userRole, onClos
     setSuccess(null)
     setIsSubmitting(true)
     try {
-      await inviteCompanyMember(companyId, inviteEmail.trim(), inviteRole)
-      setSuccess(`Invitation sent to ${inviteEmail}.`)
+      const res = await inviteCompanyMember(companyId, inviteEmail.trim(), inviteRole)
+      setSuccess(`Invitation created for ${inviteEmail}.`)
+      if (res.invitation_token) {
+        const fullUrl = `${window.location.origin}/invite/accept?token=${res.invitation_token}`
+        setCreatedInviteUrl(fullUrl)
+      } else {
+        setCreatedInviteUrl(null)
+      }
       setInviteEmail("")
       await loadMembers()
     } catch (err: any) {
       setError(err.message || "Failed to invite member.")
+      setCreatedInviteUrl(null)
     } finally {
       setIsSubmitting(false)
     }
   }
 
   const handleRemove = async (membershipId: string) => {
-    if (!confirm("Are you sure you want to remove this member from the workspace?")) return
+    if (!confirm("Are you sure you want to remove this member or cancel this invitation?")) return
     try {
       await removeCompanyMember(companyId, membershipId)
       await loadMembers()
@@ -101,6 +110,31 @@ export function WorkspaceMembersModal({ companyId, companyName, userRole, onClos
           </div>
         )}
 
+        {createdInviteUrl && (
+          <div className="mb-4 p-3.5 rounded-lg bg-secondary/50 border border-border space-y-2">
+            <div className="text-[11px] font-semibold text-foreground flex items-center justify-between">
+              <span>Secure Setup Link (for invited worker):</span>
+              <button
+                type="button"
+                onClick={() => {
+                  navigator.clipboard.writeText(createdInviteUrl)
+                  setCopied(true)
+                  setTimeout(() => setCopied(false), 2500)
+                }}
+                className="px-2 py-0.5 bg-primary text-primary-foreground rounded text-[10px] font-medium hover:bg-primary/90 transition-colors cursor-pointer"
+              >
+                {copied ? "Copied!" : "Copy Link"}
+              </button>
+            </div>
+            <div className="text-[11px] text-muted-foreground font-mono truncate select-all bg-background/60 p-2 rounded border border-border">
+              {createdInviteUrl}
+            </div>
+            <div className="text-[10px] text-muted-foreground leading-relaxed">
+              Share this single-use link with the worker. They will create their own private password to join this workspace.
+            </div>
+          </div>
+        )}
+
         {/* Invite Form (Admins/Owners only) */}
         {canManage && (
           <form onSubmit={handleInvite} className="mb-6 p-4 rounded-lg bg-secondary/30 border border-border space-y-3">
@@ -124,7 +158,7 @@ export function WorkspaceMembersModal({ companyId, companyName, userRole, onClos
                 className="px-3 py-2 bg-background border border-input rounded-lg text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-ring"
               >
                 <option value="analyst">Analyst (Upload & Edit)</option>
-                <option value="admin">Admin (Manage Workspace)</option>
+                {userRole === "owner" && <option value="admin">Admin (Manage Workspace)</option>}
                 <option value="viewer">Viewer (Read-Only)</option>
               </select>
 
@@ -167,16 +201,32 @@ export function WorkspaceMembersModal({ companyId, companyName, userRole, onClos
                   <div className="text-[11px] text-muted-foreground mt-0.5">{m.user_email}</div>
                 </div>
 
-                {canManage && m.role !== "owner" && (
-                  <button
-                    type="button"
-                    onClick={() => handleRemove(m.membership_id)}
-                    className="p-1.5 text-muted-foreground hover:text-destructive hover:bg-destructive/10 rounded-lg transition-colors cursor-pointer"
-                    title="Remove member"
-                  >
-                    <Trash2 className="w-3.5 h-3.5" />
-                  </button>
-                )}
+                <div className="flex items-center gap-2">
+                  {m.status === "pending" && m.invitation_token && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const url = `${window.location.origin}/invite/accept?token=${m.invitation_token}`
+                        navigator.clipboard.writeText(url)
+                        alert("Setup link copied to clipboard!")
+                      }}
+                      className="px-2 py-1 text-[10px] text-primary hover:underline font-medium cursor-pointer"
+                      title="Copy setup link"
+                    >
+                      Copy Link
+                    </button>
+                  )}
+                  {canManage && m.role !== "owner" && (
+                    <button
+                      type="button"
+                      onClick={() => handleRemove(m.membership_id)}
+                      className="p-1.5 text-muted-foreground hover:text-destructive hover:bg-destructive/10 rounded-lg transition-colors cursor-pointer"
+                      title={m.status === "pending" ? "Revoke invitation" : "Remove member"}
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+                  )}
+                </div>
               </div>
             ))
           )}

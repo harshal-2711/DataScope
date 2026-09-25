@@ -36,6 +36,8 @@ export interface MemberResponseItem {
   role: "owner" | "admin" | "analyst" | "viewer"
   status: string
   created_at: string
+  invitation_token?: string | null
+  invite_url?: string | null
 }
 
 export interface CompanyDetail {

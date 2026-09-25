@@ -20,11 +20,14 @@ from app.core.security import (
 from app.db.session import get_db
 from app.models.company import Company
 from app.models.membership import CompanyMembership
+from app.models.invitation import Invitation
 from app.models.user import User
 from app.schemas.auth import (
+    AcceptInvitationRequest,
     CompanyMembershipItem,
     ForgotPasswordRequest,
     GoogleAuthRequest,
+    InvitationValidateResponse,
     RefreshTokenRequest,
     ResetPasswordRequest,
     TokenResponse,
@@ -500,5 +503,178 @@ def reset_password(payload: ResetPasswordRequest, db: Session = Depends(get_db))
         "status": "success",
         "message": "Password successfully updated. You can now log in with your new password.",
     }
+
+
+@router.get("/invitations/{token}", response_model=InvitationValidateResponse)
+def validate_invitation(token: str, db: Session = Depends(get_db)):
+    """Validate a pending worker invitation token."""
+    inv = db.query(Invitation).filter(Invitation.invitation_token == token).first()
+    if not inv:
+        return InvitationValidateResponse(
+            valid=False,
+            error="This invitation link is invalid or does not exist. Please check with your team administrator.",
+        )
+
+    if inv.status != "pending":
+        status_msg = "already been accepted" if inv.status == "accepted" else "been revoked"
+        return InvitationValidateResponse(
+            valid=False,
+            error=f"This invitation has {status_msg}. Please request a new invitation.",
+        )
+
+    expires_at = inv.expires_at
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+
+    if datetime.now(timezone.utc) > expires_at:
+        return InvitationValidateResponse(
+            valid=False,
+            error="This invitation link has expired. Please ask your administrator to send a fresh invitation.",
+        )
+
+    company = db.query(Company).filter(Company.id == inv.company_id).first()
+    return InvitationValidateResponse(
+        valid=True,
+        email=inv.email,
+        role=inv.role,
+        company_name=company.name if company else "DataScope Workspace",
+        company_id=str(inv.company_id),
+    )
+
+
+@router.post("/invitations/accept", response_model=TokenResponse)
+def accept_invitation(payload: AcceptInvitationRequest, db: Session = Depends(get_db)):
+    """Accept an invitation, create own worker password, join workspace, and authenticate."""
+    inv = db.query(Invitation).filter(Invitation.invitation_token == payload.token).first()
+    if not inv or inv.status != "pending":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid or expired invitation token.",
+        )
+
+    expires_at = inv.expires_at
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+
+    if datetime.now(timezone.utc) > expires_at:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="This invitation link has expired. Please ask your administrator for a new one.",
+        )
+
+    company = db.query(Company).filter(Company.id == inv.company_id).first()
+    if not company:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="The associated company workspace could not be found.",
+        )
+
+    now = datetime.now(timezone.utc)
+    email_clean = inv.email.lower().strip()
+
+    # Check if user already exists
+    user = db.query(User).filter(User.email == email_clean).first()
+    if not user:
+        # Create new worker account with their own password
+        worker_id = str(uuid.uuid4())
+        hashed_pwd = hash_password(payload.password)
+        
+        from app.db.session import is_postgres
+        if is_postgres:
+            from sqlalchemy import text
+            try:
+                db.execute(text("""
+                    INSERT INTO auth.users (
+                        id, instance_id, aud, role, email, encrypted_password, 
+                        email_confirmed_at, raw_app_meta_data, raw_user_meta_data, 
+                        created_at, updated_at
+                    ) VALUES (
+                        :uid, '00000000-0000-0000-0000-000000000000', 'authenticated', 'authenticated', 
+                        :email, :pwd, now(), '{"provider":"email","providers":["email"]}', 
+                        json_build_object('full_name', :name), now(), now()
+                    )
+                    ON CONFLICT (id) DO NOTHING;
+                """), {
+                    "uid": worker_id,
+                    "email": email_clean,
+                    "pwd": hashed_pwd,
+                    "name": payload.full_name.strip(),
+                })
+                db.flush()
+            except Exception as e:
+                pass
+
+        user = User(
+            id=worker_id,
+            email=email_clean,
+            full_name=payload.full_name.strip(),
+            hashed_password=hashed_pwd,
+            is_active=True,
+            is_verified=True,
+            auth_provider="local",
+            created_at=now,
+            updated_at=now,
+        )
+        db.add(user)
+        db.flush()
+    else:
+        # If user existed but had no password or requested password update
+        if not user.hashed_password:
+            user.hashed_password = hash_password(payload.password)
+        if payload.full_name and not user.full_name:
+            user.full_name = payload.full_name.strip()
+        user.is_active = True
+        user.updated_at = now
+
+    # Add or update company membership
+    existing_mem = (
+        db.query(CompanyMembership)
+        .filter(CompanyMembership.user_id == user.id, CompanyMembership.company_id == inv.company_id)
+        .first()
+    )
+    if existing_mem:
+        existing_mem.role = inv.role
+        existing_mem.status = "active"
+        existing_mem.updated_at = now
+    else:
+        new_mem = CompanyMembership(
+            id=str(uuid.uuid4()),
+            user_id=user.id,
+            company_id=inv.company_id,
+            role=inv.role,
+            status="active",
+            created_at=now,
+            updated_at=now,
+        )
+        db.add(new_mem)
+
+    # Mark invitation accepted
+    inv.status = "accepted"
+    inv.updated_at = now
+    db.commit()
+    db.refresh(user)
+
+    # Issue JWT tokens for worker
+    token_data = {"sub": str(user.id), "email": user.email, "company_id": str(company.id)}
+    access_token = create_access_token(token_data)
+    refresh_token = create_refresh_token(token_data)
+
+    user_resp = UserProfileResponse(
+        id=str(user.id),
+        email=user.email,
+        full_name=user.full_name,
+        avatar_url=user.avatar_url,
+        is_active=user.is_active,
+        is_verified=user.is_verified,
+        auth_provider=user.auth_provider,
+        created_at=user.created_at,
+    )
+
+    return TokenResponse(
+        access_token=access_token,
+        refresh_token=refresh_token,
+        user=user_resp,
+        active_company_id=str(company.id),
+    )
 
 

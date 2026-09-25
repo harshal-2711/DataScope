@@ -9,6 +9,7 @@ from app.models.data_record import DataRecord
 from app.models.audit_log import AuditLog
 from app.models.data_source import DataSource
 from app.models.data_sync_job import DataSyncJob
+from app.models.invitation import Invitation
 
 __all__ = [
     "User",
@@ -20,5 +21,6 @@ __all__ = [
     "AuditLog",
     "DataSource",
     "DataSyncJob",
+    "Invitation",
 ]
 

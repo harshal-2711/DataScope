@@ -6,7 +6,9 @@ import {
   Users, 
   Save, 
   Plus, 
-  Trash2
+  Trash2,
+  Copy,
+  Check
 } from 'lucide-react';
 import { useAuth } from '@/context/AuthContext';
 import { fetchCompanyDetails, fetchCompanyMembers, inviteCompanyMember, removeCompanyMember, updateCompanySettings } from '@/lib/authApi';
@@ -30,6 +32,10 @@ export const SettingsPage: React.FC = () => {
   const [inviteEmail, setInviteEmail] = useState('');
   const [inviteRole, setInviteRole] = useState('analyst');
   const [inviting, setInviting] = useState(false);
+  const [createdInviteUrl, setCreatedInviteUrl] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
+
+  const isOwnerOrAdmin = activeCompany?.role === 'owner' || activeCompany?.role === 'admin';
 
   // Feedback
   const [statusMessage, setStatusMessage] = useState<{ text: string; type: 'success' | 'error' } | null>(null);
@@ -65,6 +71,10 @@ export const SettingsPage: React.FC = () => {
   const handleSaveCompany = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!activeCompany?.company_id) return;
+    if (!isOwnerOrAdmin) {
+      setStatusMessage({ text: 'Only workspace Owners and Admins can update organization settings.', type: 'error' });
+      return;
+    }
     setSavingCompany(true);
     setStatusMessage(null);
     try {
@@ -87,16 +97,26 @@ export const SettingsPage: React.FC = () => {
   const handleInvite = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!activeCompany?.company_id || !inviteEmail.trim()) return;
+    if (!isOwnerOrAdmin) {
+      setStatusMessage({ text: 'Only workspace Owners and Admins can invite team members.', type: 'error' });
+      return;
+    }
     setInviting(true);
     setStatusMessage(null);
     try {
-      await inviteCompanyMember(activeCompany.company_id, inviteEmail.trim(), inviteRole);
+      const res = await inviteCompanyMember(activeCompany.company_id, inviteEmail.trim(), inviteRole);
       setInviteEmail('');
-      setStatusMessage({ text: `Invitation sent to ${inviteEmail}!`, type: 'success' });
+      setStatusMessage({ text: `Invitation created for ${inviteEmail}!`, type: 'success' });
+      if (res.invitation_token) {
+        setCreatedInviteUrl(`${window.location.origin}/invite/accept?token=${res.invitation_token}`);
+      } else {
+        setCreatedInviteUrl(null);
+      }
       const mems = await fetchCompanyMembers(activeCompany.company_id);
       setMembers(mems);
     } catch (err: any) {
       setStatusMessage({ text: err.message || 'Failed to invite member.', type: 'error' });
+      setCreatedInviteUrl(null);
     } finally {
       setInviting(false);
     }
@@ -314,6 +334,31 @@ export const SettingsPage: React.FC = () => {
               </button>
             </form>
 
+            {/* Newly Created Invite Link */}
+            {createdInviteUrl && (
+              <div className="p-4 rounded-xl bg-emerald-500/10 border border-emerald-500/20 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+                <div className="space-y-1">
+                  <div className="text-xs font-semibold text-emerald-400">Worker Setup Link Ready</div>
+                  <div className="text-[11px] text-neutral-300">
+                    Share this single-use link with the worker so they can set their own private password:
+                  </div>
+                  <div className="font-mono text-[11px] text-neutral-400 select-all break-all">{createdInviteUrl}</div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    navigator.clipboard.writeText(createdInviteUrl);
+                    setCopied(true);
+                    setTimeout(() => setCopied(false), 2000);
+                  }}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-emerald-500 hover:bg-emerald-400 text-black rounded-lg text-xs font-semibold transition shrink-0 cursor-pointer"
+                >
+                  {copied ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                  {copied ? 'Copied' : 'Copy Link'}
+                </button>
+              </div>
+            )}
+
             {/* Members List */}
             <div className="divide-y divide-neutral-800 border border-neutral-800 rounded-xl overflow-hidden">
               {loadingMembers ? (
@@ -328,12 +373,19 @@ export const SettingsPage: React.FC = () => {
                         {m.user_full_name ? m.user_full_name.charAt(0).toUpperCase() : 'U'}
                       </div>
                       <div>
-                        <div className="text-xs font-semibold text-white">{m.user_full_name}</div>
+                        <div className="text-xs font-semibold text-white flex items-center gap-2">
+                          {m.user_full_name}
+                          {m.status === 'pending' && (
+                            <span className="px-1.5 py-0.5 rounded text-[9px] font-semibold uppercase bg-amber-500/10 text-amber-400 border border-amber-500/20">
+                              Pending
+                            </span>
+                          )}
+                        </div>
                         <div className="text-[11px] text-neutral-400">{m.user_email}</div>
                       </div>
                     </div>
 
-                    <div className="flex items-center gap-3">
+                    <div className="flex items-center gap-2 sm:gap-3">
                       <span className={`px-2.5 py-0.5 rounded text-[10px] font-semibold uppercase ${
                         m.role === 'owner'
                           ? 'bg-amber-500/10 text-amber-400 border border-amber-500/20'
@@ -346,11 +398,27 @@ export const SettingsPage: React.FC = () => {
                         {m.role}
                       </span>
 
+                      {m.status === 'pending' && m.invitation_token && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const url = `${window.location.origin}/invite/accept?token=${m.invitation_token}`;
+                            navigator.clipboard.writeText(url);
+                            setStatusMessage({ text: `Invitation link copied for ${m.user_email}`, type: 'success' });
+                          }}
+                          className="px-2.5 py-1 text-[11px] bg-neutral-800 hover:bg-neutral-700 text-neutral-200 rounded-lg transition inline-flex items-center gap-1 cursor-pointer"
+                          title="Copy worker setup link"
+                        >
+                          <Copy className="w-3 h-3" />
+                          <span className="hidden sm:inline">Copy Link</span>
+                        </button>
+                      )}
+
                       {m.role !== 'owner' && (
                         <button
                           onClick={() => handleRemoveMember(m.membership_id)}
                           className="p-1.5 text-neutral-500 hover:text-red-400 transition cursor-pointer"
-                          title="Remove Member"
+                          title={m.status === 'pending' ? 'Revoke Invitation' : 'Remove Member'}
                         >
                           <Trash2 className="w-3.5 h-3.5" />
                         </button>

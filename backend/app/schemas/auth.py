@@ -83,6 +83,23 @@ class MemberResponseItem(BaseModel):
     role: str
     status: str
     created_at: datetime
+    invitation_token: Optional[str] = None
+    invite_url: Optional[str] = None
+
+
+class InvitationValidateResponse(BaseModel):
+    valid: bool
+    email: Optional[str] = None
+    role: Optional[str] = None
+    company_name: Optional[str] = None
+    company_id: Optional[str] = None
+    error: Optional[str] = None
+
+
+class AcceptInvitationRequest(BaseModel):
+    token: str
+    full_name: str = Field(min_length=2)
+    password: str = Field(min_length=6)
 
 
 class CompanyDetailResponse(BaseModel):

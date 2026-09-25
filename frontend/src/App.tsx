@@ -9,6 +9,7 @@ import Register from "@/pages/Auth/Register"
 import ForgotPasswordPage from "@/pages/Auth/ForgotPassword"
 import ResetPasswordPage from "@/pages/Auth/ResetPassword"
 import OnboardingPage from "@/pages/Auth/Onboarding"
+import AcceptInvitePage from "@/pages/Auth/AcceptInvite"
 import Overview from "@/pages/Overview"
 import Dataset from "@/pages/Dataset"
 import ConnectDataSource from "@/pages/ConnectDataSource"
@@ -54,6 +55,7 @@ function AppRoutes() {
       <Route path="/forgot-password" element={<ForgotPasswordPage />} />
       <Route path="/reset-password" element={<ResetPasswordPage />} />
       <Route path="/onboarding" element={isAuthenticated ? <OnboardingPage /> : <Navigate to="/login" replace />} />
+      <Route path="/invite/accept" element={<AcceptInvitePage />} />
 
       {/* Main Authenticated Workspace Routes */}
       <Route element={<ProtectedLayout />}>
