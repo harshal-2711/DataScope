@@ -345,3 +345,32 @@ DROP POLICY IF EXISTS "Authenticated users can read dataset files" ON storage.ob
 CREATE POLICY "Authenticated users can read dataset files"
     ON storage.objects FOR SELECT
     USING (bucket_id IN ('datasets', 'reports') AND auth.uid() IS NOT NULL);
+
+-- Additional Least-Privilege & Management Policies
+DROP POLICY IF EXISTS "Owners can delete company" ON public.companies;
+CREATE POLICY "Owners can delete company" ON public.companies FOR DELETE
+    USING (public.user_has_company_role(id, ARRAY['owner']));
+
+DROP POLICY IF EXISTS "Admins and Owners can delete dataset versions" ON public.dataset_versions;
+CREATE POLICY "Admins and Owners can delete dataset versions" ON public.dataset_versions FOR DELETE
+    USING (EXISTS (
+        SELECT 1 FROM public.datasets d
+        WHERE d.id = dataset_versions.dataset_id
+          AND public.user_has_company_role(d.company_id, ARRAY['owner', 'admin'])
+    ));
+
+DROP POLICY IF EXISTS "Analysts can manage sync jobs" ON public.data_sync_jobs;
+CREATE POLICY "Analysts can manage sync jobs" ON public.data_sync_jobs FOR ALL
+    USING (EXISTS (
+        SELECT 1 FROM public.data_sources s
+        WHERE s.id = COALESCE(data_sync_jobs.data_source_id, data_sync_jobs.source_id)
+          AND public.user_has_company_role(s.company_id, ARRAY['owner', 'admin', 'analyst'])
+    ));
+
+DROP POLICY IF EXISTS "Users can only read own user record" ON public.users;
+CREATE POLICY "Users can only read own user record" ON public.users FOR SELECT
+    USING (auth.uid()::text = id::text);
+
+DROP POLICY IF EXISTS "Users can only update own user record" ON public.users;
+CREATE POLICY "Users can only update own user record" ON public.users FOR UPDATE
+    USING (auth.uid()::text = id::text);

@@ -149,6 +149,12 @@ def get_current_company(
             .first()
         )
 
+    if target_company_id and not membership:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access denied. You are not an active member of this company workspace.",
+        )
+
     if not membership:
         # Fall back to user's first active company membership
         membership = (

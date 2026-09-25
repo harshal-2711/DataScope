@@ -105,6 +105,29 @@ def get_company_details(
     db: Session = Depends(get_db),
 ):
     """Get metadata and statistics for the active company workspace."""
+    if company_id != tenant.company_id:
+        membership = (
+            db.query(CompanyMembership)
+            .filter(
+                CompanyMembership.user_id == tenant.user.id,
+                CompanyMembership.company_id == company_id,
+                CompanyMembership.status == "active",
+            )
+            .first()
+        )
+        if not membership:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Access denied. You are not an active member of this company workspace.",
+            )
+        company = db.query(Company).filter(Company.id == company_id).first()
+        if not company:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Company workspace not found.",
+            )
+        tenant = TenantContext(company=company, membership=membership, user=tenant.user)
+
     member_count = (
         db.query(CompanyMembership)
         .filter(CompanyMembership.company_id == tenant.company_id, CompanyMembership.status == "active")
